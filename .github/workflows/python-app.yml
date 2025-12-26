@@ -1,0 +1,40 @@
+name: Python Application
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+
+    - name: Install Playwright browsers
+      run: |
+        playwright install chromium
+
+    - name: Run tests
+      run: |
+        python -m pytest test_system.py -v
+
+    - name: Check code quality
+      run: |
+        python -c "import advanced_amazon_spider; print('Import successful')"
+        python -c "import data_validator; print('Data validator import successful')"
+        python -c "import proxy_manager; print('Proxy manager import successful')"

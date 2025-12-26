@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files
+*.xlsx
+*.csv
+*.json
+*.db
+*.log
+
+# Scrapy
+scrapy.log
+items.json
+
+# Playwright
+.playwright/
+
+# Local configuration
+.env
+config.json
+proxy_config.json
+
+# PyInstaller
+*.spec
+
+# Coverage
+.coverage
+htmlcov/
+
+# Distribution
+*.tar.gz
+*.tar.bz2
+
+# Environment specific
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
