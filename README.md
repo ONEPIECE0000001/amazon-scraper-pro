@@ -1,4 +1,4 @@
-# 亚马逊电商平台商品数据智能采集系统
+# Amazon Scraper Pro
 
 <div align="center">
 
@@ -25,7 +25,7 @@
 
 **⚠️ 声明**
 
-本项目为独立开发版本，与原始项目（[Hhhexx/python-amazon-spider](https://github.com/Hhhexx/python-amazon-spider)）无直接关联。所有优化和改进均为本项目独立完成。
+本项目为完全独立的开源项目，所有代码和优化均为原创开发。
 
 ## 核心功能
 
