@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -23,11 +24,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Amazon product scraper")
     parser.add_argument("--keyword", "-k", required=True, help="search keyword")
     parser.add_argument("--pages", "-p", type=int, default=2, help="pages to crawl")
+    parser.add_argument("--start-page", type=int, default=1,
+                        help="first page number (for batch resume, e.g. --start-page 6 --pages 5)")
     parser.add_argument(
         "--show-browser", action="store_true", help="run browser in headed mode"
     )
     parser.add_argument(
         "--no-proxy", action="store_true", help="disable proxy pool"
+    )
+    parser.add_argument(
+        "--no-detail", action="store_true",
+        help="fast mode: skip detail pages, only grab search result fields"
     )
     args = parser.parse_args()
 
@@ -50,15 +57,25 @@ def main() -> None:
     print(f"MySQL: {'enabled' if mysql_enabled else 'disabled'}")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print(f"Output: output/amazon_{args.keyword}_{ts}.csv")
+    safe_keyword = re.sub(r"[^\w\-]", "_", args.keyword)
+    start_p = args.start_page
+    end_p = start_p + args.pages - 1
+    page_range = f"p{start_p}-{end_p}" if args.pages > 1 else f"p{start_p}"
+    mode = "fast" if args.no_detail else "full"
+    output_file = f"output/amazon_{safe_keyword}_{page_range}_{mode}_{ts}.csv"
+    print(f"Output: {output_file}")
 
     # --- build scrapy command ---
     cmd = [
         sys.executable, "-m", "scrapy", "crawl", "amazon",
         "-a", f"keyword={args.keyword}",
         "-a", f"max_pages={args.pages}",
+        "-a", f"start_page={args.start_page}",
+        "-a", f"crawl_detail={1 if not args.no_detail else 0}",
         "-a", f"headless={not args.show_browser}",
         "-s", f"PROXY_ENABLED={use_proxy}",
+        "-s", "FEEDS=",           # clear default feed to avoid duplicate CSV
+        "-o", output_file,
     ]
 
     print(f"\nRunning: {' '.join(cmd)}\n")

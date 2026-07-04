@@ -106,6 +106,99 @@ class DeduplicationPipeline:
         return item
 
 
+class SQLitePipeline:
+    """写入 SQLite，零依赖本地数据库，适合开发和小规模使用。
+
+    ASIN 为主键，重复则更新价格/评分/评论数/可用性/抓取时间。
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self.enabled = settings.getbool('SQLITE_ENABLED', True)
+        self.db_path = settings.get('SQLITE_PATH', 'amazon_data.db')
+
+    @classmethod
+    def from_crawler(cls, crawler: Crawler) -> 'SQLitePipeline':
+        return cls(crawler.settings)
+
+    def open_spider(self, spider: scrapy.Spider) -> None:
+        if not self.enabled:
+            logger.info("SQLite pipeline disabled (SQLITE_ENABLED=False)")
+            return
+
+        import sqlite3
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.execute("PRAGMA journal_mode=WAL")  # better concurrent perf
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                asin        TEXT    NOT NULL UNIQUE,
+                title       TEXT,
+                price       REAL,
+                original_price REAL,
+                rating      REAL,
+                review_count INTEGER,
+                brand       TEXT,
+                category    TEXT,
+                seller_name TEXT,
+                availability TEXT,
+                is_prime    TEXT,
+                url         TEXT,
+                image_url   TEXT,
+                description TEXT,
+                date_first_available TEXT,
+                scraped_at  TEXT,
+                created_at  TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_asin ON products(asin)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_keyword ON products(category)"
+        )
+        self.conn.commit()
+        logger.info(f"SQLite connected: {self.db_path}")
+
+    def process_item(self, item: scrapy.Item, spider: scrapy.Spider) -> scrapy.Item:
+        if not self.enabled:
+            return item
+
+        import sqlite3
+        try:
+            self.conn.execute("""
+                INSERT INTO products
+                    (asin, title, price, original_price, rating, review_count,
+                     brand, category, seller_name, availability, is_prime,
+                     url, image_url, description, date_first_available, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(asin) DO UPDATE SET
+                    price       = excluded.price,
+                    original_price = excluded.original_price,
+                    rating      = excluded.rating,
+                    review_count = excluded.review_count,
+                    availability = excluded.availability,
+                    is_prime    = excluded.is_prime,
+                    scraped_at  = excluded.scraped_at
+            """, (
+                item.get('asin'), item.get('title'), item.get('price'),
+                item.get('original_price'), item.get('rating'), item.get('review_count'),
+                item.get('brand'), item.get('category'), item.get('seller_name'),
+                item.get('availability'), item.get('is_prime'),
+                item.get('url'), item.get('image_url'), item.get('description'),
+                item.get('date_first_available'), item.get('scraped_at'),
+            ))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.warning(f"SQLite insert failed for {item.get('asin')}: {e}")
+
+        return item
+
+    def close_spider(self, spider: scrapy.Spider) -> None:
+        if hasattr(self, 'conn') and self.conn:
+            self.conn.close()
+            logger.info("SQLite connection closed")
+
+
 class MySQLPipeline:
     """写入 MySQL，ASIN 为主键，重复则更新价格/评分/评论数/可用性/抓取时间"""
 

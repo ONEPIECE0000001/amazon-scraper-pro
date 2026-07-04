@@ -22,6 +22,9 @@ if _ENV_PATH.exists():
 
 BOT_NAME = 'amazon_scraper'
 
+# Log level — INFO suppresses DEBUG noise (proxy, scraped items, crawls)
+LOG_LEVEL = 'INFO'
+
 SPIDER_MODULES = ['amazon_spider.spiders']
 
 
@@ -95,6 +98,8 @@ DOWNLOADER_MIDDLEWARES = {
     'scrapy.downloadermiddlewares.retry.RetryMiddleware': None,
     'amazon_spider.middlewares.retry_middleware.ExponentialRetryMiddleware': 550,
     'amazon_spider.middlewares.proxy_middleware.ProxyMiddleware': 750,
+    # curl_cffi TLS fingerprint impersonation — runs after proxy injection
+    'amazon_spider.middlewares.curl_cffi_middleware.CurlCffiDownloaderMiddleware': 960,
 }
 
 # Enable or disable extensions
@@ -108,7 +113,8 @@ DOWNLOADER_MIDDLEWARES = {
 ITEM_PIPELINES = {
     'amazon_spider.pipelines.DataCleaningPipeline': 100,
     'amazon_spider.pipelines.DeduplicationPipeline': 200,
-    'amazon_spider.pipelines.MySQLPipeline': 300,
+    'amazon_spider.pipelines.SQLitePipeline': 300,
+    'amazon_spider.pipelines.MySQLPipeline': 400,
 }
 
 # Enable and configure the AutoThrottle extension (disabled by default)
@@ -152,6 +158,12 @@ MEMUSAGE_NOTIFY_MAIL = ['admin@example.com']
 MEMUSAGE_WARNING_MB = 1024
 
 # ---------------------------------------------------------------------------
+# SQLite pipeline — zero-dependency local database, perfect for dev / web UI
+# ---------------------------------------------------------------------------
+SQLITE_ENABLED = os.environ.get('SQLITE_ENABLED', 'True').lower() in ('1', 'true', 'yes')
+SQLITE_PATH = os.environ.get('SQLITE_PATH', 'amazon_data.db')
+
+# ---------------------------------------------------------------------------
 # MySQL pipeline — credentials are read from environment variables with
 # sensible defaults for local development.
 # ---------------------------------------------------------------------------
@@ -165,9 +177,15 @@ MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', 'amazon_scraper')
 # ---------------------------------------------------------------------------
 # CSV export via Scrapy FEEDS — always active regardless of MySQL status
 # ---------------------------------------------------------------------------
+FEED_EXPORTERS = {
+    'csv': 'amazon_spider.feedexport.BilingualCsvExporter',
+}
+
+# Default feed — used when running scrapy crawl directly without -o.
+# When using main.py, the -o flag overrides this path.
 FEEDS = {
     'output/amazon_%(time)s.csv': {
         'format': 'csv',
-        'encoding': 'utf-8',
+        'encoding': 'utf-8-sig',  # UTF-8 BOM for Excel compatibility
     }
 }
