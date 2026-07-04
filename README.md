@@ -1,4 +1,4 @@
-# Amazon Scraper Pro
+# Amazon Scraper Pro 亚马逊商品数据采集
 
 <div align="center">
 
