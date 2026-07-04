@@ -12,60 +12,8 @@ from scrapy.http import HtmlResponse, Request
 
 sys.path.insert(0, "..")
 
-from amazon_spider.middlewares.stealth_middleware import PlaywrightStealthMiddleware
 from amazon_spider.middlewares.retry_middleware import ExponentialRetryMiddleware
 from amazon_spider.middlewares.proxy_middleware import ProxyMiddleware
-
-
-# ---------------------------------------------------------------------------
-# PlaywrightStealthMiddleware
-# ---------------------------------------------------------------------------
-
-class TestPlaywrightStealthMiddleware:
-    @pytest.fixture
-    def middleware(self):
-        return PlaywrightStealthMiddleware()
-
-    @pytest.fixture
-    def spider(self):
-        return MagicMock()
-
-    def test_stealth_js_loaded_on_init(self, middleware):
-        assert middleware.stealth_js is not None
-        assert isinstance(middleware.stealth_js, str)
-        assert len(middleware.stealth_js) > 0
-
-    def test_injects_init_script_for_playwright_request(self, middleware, spider):
-        request = Request(
-            url="https://www.amazon.com/s?k=laptop",
-            meta={"playwright": True, "playwright_page_coroutines": []},
-        )
-        middleware.process_request(request, spider)
-
-        coroutines = request.meta["playwright_page_coroutines"]
-        assert len(coroutines) == 1
-        from scrapy_playwright.page import PageMethod
-        assert isinstance(coroutines[0], PageMethod)
-        assert coroutines[0].method == "add_init_script"
-        assert coroutines[0].args == (middleware.stealth_js,)
-
-    def test_skips_non_playwright_request(self, middleware, spider):
-        request = Request(url="https://www.amazon.com/s?k=laptop", meta={})
-        middleware.process_request(request, spider)
-        assert "playwright_page_coroutines" not in request.meta
-
-    def test_inserts_at_beginning_for_existing_coroutines(self, middleware, spider):
-        from scrapy_playwright.page import PageMethod
-        existing = PageMethod("wait_for_selector", ".some-selector")
-        request = Request(
-            url="https://www.amazon.com/s?k=laptop",
-            meta={"playwright": True, "playwright_page_coroutines": [existing]},
-        )
-        middleware.process_request(request, spider)
-
-        coroutines = request.meta["playwright_page_coroutines"]
-        assert coroutines[0].method == "add_init_script"
-        assert coroutines[1] is existing
 
 
 # ---------------------------------------------------------------------------

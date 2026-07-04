@@ -70,3 +70,13 @@ htmlcov/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Debug artifacts
+debug_*.html
+pw_*.html
+pw_full.html
+amazon_page.png
+
+# Output data
+output/
+*.sqlite3

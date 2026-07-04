@@ -184,6 +184,7 @@ class TestAmazonProductItem:
     def test_item_has_expected_fields(self):
         item = AmazonProductItem()
         expected = {
+            "keyword",
             "asin", "title", "price", "original_price", "rating",
             "review_count", "brand", "category", "seller_name",
             "availability", "is_prime", "url", "image_url",
