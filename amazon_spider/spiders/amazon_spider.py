@@ -198,12 +198,8 @@ class AdvancedAmazonSpider(scrapy.Spider):
                 item["date_first_available"] = None
                 item["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                # Follow to detail page, or yield now if no detail URL
-                if product_url:
-                    self._pending[asin] = item
-                    yield self._build_detail_request(product_url, asin, item)
-                else:
-                    yield item
+                # Yield search data directly (detail page requires more time)
+                yield item
 
             except Exception:
                 self.logger.error("Error parsing product", exc_info=True)
