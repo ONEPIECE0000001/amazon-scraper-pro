@@ -8,6 +8,17 @@
 #     https://docs.scrapy.org/en/latest/topics/spider-middleware.html
 
 import os
+from pathlib import Path
+
+# Load .env file from project root
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_PATH.exists():
+    with open(_ENV_PATH, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
+                os.environ.setdefault(_key.strip(), _val.strip())
 
 BOT_NAME = 'amazon_scraper'
 
@@ -48,7 +59,7 @@ RANDOMIZE_DOWNLOAD_DELAY = 0.5
 #CONCURRENT_REQUESTS_PER_IP = 16
 
 # Disable cookies (enabled by default)
-COOKIES_ENABLED = False
+COOKIES_ENABLED = True
 
 # Disable Telnet Console (enabled by default)
 #TELNETCONSOLE_ENABLED = False
@@ -82,9 +93,6 @@ PROXY_ENABLED = True
 DOWNLOADER_MIDDLEWARES = {
     'scrapy.downloadermiddlewares.useragent.UserAgentMiddleware': None,
     'scrapy.downloadermiddlewares.retry.RetryMiddleware': None,
-    'scrapy_fake_useragent.middleware.RandomUserAgentMiddleware': 400,
-    'scrapy_fake_useragent.middleware.RetryMiddleware': 401,
-    'amazon_spider.middlewares.stealth_middleware.PlaywrightStealthMiddleware': 543,
     'amazon_spider.middlewares.retry_middleware.ExponentialRetryMiddleware': 550,
     'amazon_spider.middlewares.proxy_middleware.ProxyMiddleware': 750,
 }
@@ -124,45 +132,6 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 0.5
 #HTTPCACHE_IGNORE_HTTP_CODES = []
 #HTTPCACHE_STORAGE = 'scrapy.extensions.httpcache.FilesystemCacheStorage'
 
-# Playwright settings
-TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
-DOWNLOAD_HANDLERS = {
-    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-}
-
-PLAYWRIGHT_BROWSER_TYPE = "chromium"
-PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": True,
-    "timeout": 30000,
-    "args": [
-        "--no-sandbox",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-dev-shm-usage",
-        "--disable-web-security",
-        "--disable-features=VizDisplayCompositor",
-        "--disable-setuid-sandbox",
-        "--disable-accelerated-2d-canvas",
-        "--no-first-run",
-        "--no-zygote",
-        "--disable-gpu",
-        "--disable-extensions",
-        "--disable-extensions-except=",
-        "--disable-plugins-discovery",
-        "--start-maximized",
-        "--disable-background-tasks",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--no-default-browser-check",
-        "--disable-default-apps",
-        "--disable-ipc-flooding-protection",
-        "--disable-background-networking"
-    ]
-}
-PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 60000
-PLAYWRIGHT_MAX_PAGES_PER_CONTEXT = 10
-
-# Custom settings for anti-detection
 USER_AGENT_CHOICES = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',

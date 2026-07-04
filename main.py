@@ -6,6 +6,17 @@ import os
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
+
+# Load .env file if present
+_ENV_PATH = Path(__file__).resolve().parent / ".env"
+if _ENV_PATH.exists():
+    with open(_ENV_PATH, encoding="utf-8") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
+                os.environ.setdefault(_key.strip(), _val.strip())
 
 
 def main() -> None:

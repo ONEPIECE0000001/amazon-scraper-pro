@@ -33,6 +33,11 @@ class ProxyMiddleware:
         if proxy_url:
             self.current_proxy = proxy_url
             request.meta["proxy"] = proxy_url
+            # Also inject into Playwright context so the browser uses the proxy
+            ctx_kwargs = request.meta.setdefault(
+                "playwright_context_kwargs", {}
+            )
+            ctx_kwargs.setdefault("proxy", {"server": proxy_url})
             logger.debug("Using proxy: %s", proxy_url)
         else:
             logger.warning("No proxy available, using direct connection")

@@ -2,6 +2,7 @@
 Proxy pool with auto-refresh from free proxy sources and validation.
 """
 import logging
+import os
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -130,9 +131,25 @@ class ProxyPool:
             logger.debug(f"Marked bad proxy: {proxy}")
 
     def refresh(self) -> None:
-        """Fetch and validate proxies, replacing the current pool."""
-        self.validate_proxies()
-        logger.info(f"Proxy pool refreshed: {len(self.proxies)} available")
+        """Fetch and validate proxies, replacing the current pool.
+
+        Priority:
+        1. CUSTOM_PROXIES env var (comma-separated list of proxy URLs)
+        2. Free public proxy sources (GitHub)
+        """
+        custom = os.environ.get("CUSTOM_PROXIES", "").strip()
+        if custom:
+            validated: List[Dict[str, Union[str, float]]] = []
+            for url in (u.strip() for u in custom.split(",") if u.strip()):
+                validated.append({"url": url, "latency": 0.0, "score": 1.0})
+            self.proxies = validated
+            logger.info(
+                "Proxy pool loaded %d custom proxies from CUSTOM_PROXIES",
+                len(validated),
+            )
+        else:
+            self.validate_proxies()
+        logger.info("Proxy pool refreshed: %d available", len(self.proxies))
 
     def stats(self) -> Dict[str, Union[int, float]]:
         """Return pool statistics."""
