@@ -25,26 +25,27 @@ class AdvancedAmazonSpider(scrapy.Spider):
         self.retry_times = 3
         self._pending = {}  # asin → search-item, held until detail merge
 
-        # User-Agent rotation
+        # User-Agent rotation — always set fallback list
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) "
+            "Gecko/20100101 Firefox/132.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) "
+            "Gecko/20100101 Firefox/132.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+            "(KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+        ]
         try:
             self.ua = UserAgent()
         except Exception:
-            self.user_agents = [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) "
-                "Gecko/20100101 Firefox/132.0",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) "
-                "Gecko/20100101 Firefox/132.0",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
-                "(KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-            ]
+            pass
 
     # ── UA helpers ──────────────────────────────────────────────────────
 
@@ -129,8 +130,17 @@ class AdvancedAmazonSpider(scrapy.Spider):
                 if product.css(".s-sponsored-faceout-badge-wrapper").get():
                     continue
 
-                # Title
-                title = (product.css("h2 a span::text").get() or "").strip() or None
+                # Title — Amazon 2026 markup: h2 no longer contains <a>;
+                # <a> wraps h2 from outside.  Use aria-label on h2 first,
+                # fall back to h2 > span, then h2 ::text.
+                title = (
+                    product.css("h2::attr(aria-label)").get()
+                    or product.css("h2 > span::text").get()
+                    or "".join(product.css("h2 ::text").getall())
+                )
+                title = title.strip() if title else None
+                if not title:
+                    continue
 
                 # Price: whole + fraction
                 price = None
@@ -173,11 +183,11 @@ class AdvancedAmazonSpider(scrapy.Spider):
                     if rc_match:
                         review_count = "".join(filter(str.isdigit, rc_match[0]))
 
-                # Product URL
-                href = product.css("h2 a::attr(href)").get()
+                # Product URL — <a> now wraps h2, not inside it
+                href = product.css("a[href*='/dp/']::attr(href)").get()
                 product_url = response.urljoin(href) if href else None
 
-                if not asin or not title:
+                if not asin:
                     continue
 
                 item = AmazonProductItem()

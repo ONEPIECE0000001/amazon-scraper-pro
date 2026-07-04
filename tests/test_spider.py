@@ -24,7 +24,11 @@ SEARCH_PAGE_HTML = """
 <html>
 <body>
 <div data-component-type="s-search-result" data-asin="B09XYZ1234">
-    <h2><a href="/dp/B09XYZ1234"><span>Wireless Bluetooth Headphones</span></a></h2>
+    <a class="a-link-normal s-faceout-link aok-block a-text-normal" href="/dp/B09XYZ1234">
+        <span><span role="link">
+            <h2 aria-label="Wireless Bluetooth Headphones"><span>Wireless Bluetooth Headphones</span></h2>
+        </span></span>
+    </a>
     <span class="a-price">
         <span class="a-price-whole">49</span>
         <span class="a-price-fraction">99</span>
@@ -33,14 +37,22 @@ SEARCH_PAGE_HTML = """
     <span aria-label="1,234 ratings">1,234</span>
 </div>
 <div data-component-type="s-search-result" data-asin="B08ABCD5678">
-    <h2><a href="/gp/product/B08ABCD5678"><span>USB-C Charging Cable 2-Pack</span></a></h2>
+    <a class="a-link-normal s-faceout-link aok-block a-text-normal" href="/gp/product/B08ABCD5678">
+        <span><span role="link">
+            <h2 aria-label="USB-C Charging Cable 2-Pack"><span>USB-C Charging Cable 2-Pack</span></h2>
+        </span></span>
+    </a>
     <span class="a-offscreen">$12.99</span>
     <span class="a-icon-alt">4.2 out of 5 stars</span>
     <a role="link"><span>567</span></a>
 </div>
 <div data-component-type="s-search-result" data-asin="B07SPONSOR">
     <span class="s-sponsored-faceout-badge-wrapper"></span>
-    <h2><a href="/dp/B07SPONSOR"><span>Sponsored Product</span></a></h2>
+    <a class="a-link-normal s-faceout-link aok-block a-text-normal" href="/dp/B07SPONSOR">
+        <span><span role="link">
+            <h2 aria-label="Sponsored Product"><span>Sponsored Product</span></h2>
+        </span></span>
+    </a>
 </div>
 <a aria-label="Next page" href="/s?k=laptop&page=2"></a>
 </body>
@@ -51,7 +63,11 @@ SEARCH_PAGE_NO_NEXT = """
 <html>
 <body>
 <div data-component-type="s-search-result" data-asin="B09XYZ1234">
-    <h2><a href="/dp/B09XYZ1234"><span>Test Product</span></a></h2>
+    <a class="a-link-normal s-faceout-link aok-block a-text-normal" href="/dp/B09XYZ1234">
+        <span><span role="link">
+            <h2 aria-label="Test Product"><span>Test Product</span></h2>
+        </span></span>
+    </a>
     <span class="a-price">
         <span class="a-price-whole">10</span>
         <span class="a-price-fraction">00</span>
@@ -101,25 +117,19 @@ class TestSpiderCreation:
 
     def test_spider_default_params(self):
         spider = AdvancedAmazonSpider()
-        assert spider.min_wait_time == 3
-        assert spider.max_wait_time == 8
         assert spider.retry_times == 3
 
     def test_ua_fallback_list_loaded(self):
         spider = AdvancedAmazonSpider()
         # When fake_useragent is unavailable, the fallback list should be used
         spider.ua = None  # simulate fake_useragent failure
-        spider.user_agents = spider.custom_settings.get("USER_AGENT_CHOICES", []) or [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        ]
-        ua = spider.get_random_user_agent()
+        ua = spider._random_ua()
         assert ua in spider.user_agents
 
     def test_custom_settings_configured(self):
         spider = AdvancedAmazonSpider()
         assert spider.custom_settings["CONCURRENT_REQUESTS"] == 1
-        assert spider.custom_settings["DOWNLOAD_DELAY"] == 10
-        assert spider.custom_settings["PLAYWRIGHT_BROWSER_TYPE"] == "chromium"
+        assert spider.custom_settings["DOWNLOAD_DELAY"] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -148,20 +158,20 @@ class TestSearchPageParsing:
             url=url, body=html.encode(), encoding="utf-8", request=request
         )
 
-    @pytest.mark.asyncio
-    async def test_extracts_correct_number_of_products(self, spider, search_response):
+    
+    def test_extracts_correct_number_of_products(self, spider, search_response):
         results = []
-        async for item in spider.parse(search_response):
+        for item in spider.parse(search_response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         # 3 products in HTML, 1 is sponsored → 2 organic products
         assert len(results) == 2
 
-    @pytest.mark.asyncio
-    async def test_extracts_asin(self, spider, search_response):
+    
+    def test_extracts_asin(self, spider, search_response):
         results = []
-        async for item in spider.parse(search_response):
+        for item in spider.parse(search_response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -170,10 +180,10 @@ class TestSearchPageParsing:
         assert "B08ABCD5678" in asins
         assert "B07SPONSOR" not in asins  # sponsored
 
-    @pytest.mark.asyncio
-    async def test_extracts_title(self, spider, search_response):
+    
+    def test_extracts_title(self, spider, search_response):
         results = []
-        async for item in spider.parse(search_response):
+        for item in spider.parse(search_response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -181,10 +191,10 @@ class TestSearchPageParsing:
         assert "Wireless Bluetooth Headphones" in titles
         assert "USB-C Charging Cable 2-Pack" in titles
 
-    @pytest.mark.asyncio
-    async def test_extracts_price_whole_fraction(self, spider, search_response):
+    
+    def test_extracts_price_whole_fraction(self, spider, search_response):
         results = []
-        async for item in spider.parse(search_response):
+        for item in spider.parse(search_response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -192,8 +202,8 @@ class TestSearchPageParsing:
         item1 = [r for r in results if r["asin"] == "B09XYZ1234"][0]
         assert item1["price"] == "$49.99"
 
-    @pytest.mark.asyncio
-    async def test_extracts_price_offscreen(self, spider):
+    
+    def test_extracts_price_offscreen(self, spider):
         html = """
         <html><body>
         <div data-component-type="s-search-result" data-asin="B00TEST">
@@ -204,14 +214,14 @@ class TestSearchPageParsing:
         """
         response = self.make_response(html)
         results = []
-        async for item in spider.parse(response):
+        for item in spider.parse(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert results[0]["price"] == "$12.99"
 
-    @pytest.mark.asyncio
-    async def test_extracts_title_empty_becomes_none(self, spider):
+    
+    def test_extracts_title_empty_becomes_none(self, spider):
         html = """
         <html><body>
         <div data-component-type="s-search-result" data-asin="B00NOTITLE">
@@ -221,7 +231,7 @@ class TestSearchPageParsing:
         """
         response = self.make_response(html)
         results = []
-        async for item in spider.parse(response):
+        for item in spider.parse(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -229,18 +239,18 @@ class TestSearchPageParsing:
         # So this product is skipped because the condition `if product_id and name` fails
         assert len(results) == 0
 
-    @pytest.mark.asyncio
-    async def test_rating_from_aria_label(self, spider, search_response):
+    
+    def test_rating_from_aria_label(self, spider, search_response):
         results = []
-        async for item in spider.parse(search_response):
+        for item in spider.parse(search_response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         item1 = [r for r in results if r["asin"] == "B09XYZ1234"][0]
         assert "4.5" in item1["rating"]
 
-    @pytest.mark.asyncio
-    async def test_rating_from_icon_alt(self, spider):
+    
+    def test_rating_from_icon_alt(self, spider):
         html = """
         <html><body>
         <div data-component-type="s-search-result" data-asin="B00RATING">
@@ -251,24 +261,24 @@ class TestSearchPageParsing:
         """
         response = self.make_response(html)
         results = []
-        async for item in spider.parse(response):
+        for item in spider.parse(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert results[0]["rating"] == "4.2"
 
-    @pytest.mark.asyncio
-    async def test_review_count_from_span(self, spider, search_response):
+    
+    def test_review_count_from_span(self, spider, search_response):
         results = []
-        async for item in spider.parse(search_response):
+        for item in spider.parse(search_response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         item1 = [r for r in results if r["asin"] == "B09XYZ1234"][0]
         assert item1["review_count"] == "1234"
 
-    @pytest.mark.asyncio
-    async def test_review_count_from_link(self, spider):
+    
+    def test_review_count_from_link(self, spider):
         html = """
         <html><body>
         <div data-component-type="s-search-result" data-asin="B00REVIEW">
@@ -279,14 +289,14 @@ class TestSearchPageParsing:
         """
         response = self.make_response(html)
         results = []
-        async for item in spider.parse(response):
+        for item in spider.parse(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert results[0]["review_count"] == "567"
 
-    @pytest.mark.asyncio
-    async def test_ad_products_filtered(self, spider):
+    
+    def test_ad_products_filtered(self, spider):
         # All 3 products in the main fixture, but the sponsored one is filtered
         html = """
         <html><body>
@@ -304,7 +314,7 @@ class TestSearchPageParsing:
         """
         response = self.make_response(html)
         results = []
-        async for item in spider.parse(response):
+        for item in spider.parse(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -328,11 +338,11 @@ class TestPagination:
             url=url, body=html.encode(), encoding="utf-8", request=request
         )
 
-    @pytest.mark.asyncio
-    async def test_next_page_link_followed(self, spider):
+    
+    def test_next_page_link_followed(self, spider):
         response = self.make_response(SEARCH_PAGE_HTML)
         next_requests = []
-        async for result in spider.parse(response):
+        for result in spider.parse(response):
             if isinstance(result, Request):
                 next_requests.append(result)
 
@@ -341,11 +351,11 @@ class TestPagination:
         assert len(page_reqs) == 1
         assert "page=2" in page_reqs[0].url
 
-    @pytest.mark.asyncio
-    async def test_no_next_page_when_missing(self, spider):
+    
+    def test_no_next_page_when_missing(self, spider):
         response = self.make_response(SEARCH_PAGE_NO_NEXT)
         next_requests = []
-        async for result in spider.parse(response):
+        for result in spider.parse(response):
             if isinstance(result, Request):
                 next_requests.append(result)
 
@@ -353,8 +363,8 @@ class TestPagination:
         page_reqs = [r for r in next_requests if "/s?k=" in r.url]
         assert len(page_reqs) == 0
 
-    @pytest.mark.asyncio
-    async def test_next_page_with_last_selector(self, spider):
+    
+    def test_next_page_with_last_selector(self, spider):
         html = """
         <html><body>
         <div data-component-type="s-search-result" data-asin="B00TEST">
@@ -365,7 +375,7 @@ class TestPagination:
         """
         response = self.make_response(html)
         next_requests = []
-        async for result in spider.parse(response):
+        for result in spider.parse(response):
             if isinstance(result, Request):
                 next_requests.append(result)
 
@@ -389,8 +399,8 @@ class TestDetailPageParsing:
             url=url, body=html.encode(), encoding="utf-8", request=request
         )
 
-    @pytest.mark.asyncio
-    async def test_extracts_brand_from_byline(self, spider):
+    
+    def test_extracts_brand_from_byline(self, spider):
         search_data = {
             "asin": "B09XYZ1234",
             "title": "Wireless Bluetooth Headphones",
@@ -414,15 +424,15 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert len(results) == 1
         assert results[0]["brand"] == "BrandName"
 
-    @pytest.mark.asyncio
-    async def test_extracts_category_breadcrumb(self, spider):
+    
+    def test_extracts_category_breadcrumb(self, spider):
         search_data = {
             "asin": "B09XYZ1234", "title": "Test", "price": "$10.00",
             "rating": "4.0", "review_count": "100",
@@ -437,14 +447,14 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert results[0]["category"] == "Electronics > Headphones"
 
-    @pytest.mark.asyncio
-    async def test_extracts_date_first_available(self, spider):
+    
+    def test_extracts_date_first_available(self, spider):
         search_data = {
             "asin": "B09XYZ1234", "title": "Test", "price": "$10.00",
             "rating": "4.0", "review_count": "100",
@@ -459,14 +469,14 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert results[0]["date_first_available"] == "January 15, 2024"
 
-    @pytest.mark.asyncio
-    async def test_extracts_shipping_info(self, spider):
+    
+    def test_extracts_shipping_info(self, spider):
         search_data = {
             "asin": "B09XYZ1234", "title": "Test", "price": "$10.00",
             "rating": "4.0", "review_count": "100",
@@ -481,14 +491,14 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert "FREE delivery" in results[0]["availability"]
 
-    @pytest.mark.asyncio
-    async def test_detects_prime_status(self, spider):
+    
+    def test_detects_prime_status(self, spider):
         search_data = {
             "asin": "B09XYZ1234", "title": "Test", "price": "$10.00",
             "rating": "4.0", "review_count": "100",
@@ -503,14 +513,14 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
         assert results[0]["is_prime"] == "Yes"
 
-    @pytest.mark.asyncio
-    async def test_handles_minimal_detail_page(self, spider):
+    
+    def test_handles_minimal_detail_page(self, spider):
         """Should not crash when detail page has minimal content."""
         search_data = {
             "asin": "B09XYZ1234", "title": "Test", "price": "$10.00",
@@ -526,7 +536,7 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -536,8 +546,8 @@ class TestDetailPageParsing:
         assert results[0]["brand"] is None
         assert results[0]["is_prime"] == "No"  # no prime icon
 
-    @pytest.mark.asyncio
-    async def test_merges_search_and_detail_data(self, spider):
+    
+    def test_merges_search_and_detail_data(self, spider):
         search_data = {
             "asin": "B09XYZ1234",
             "title": "Original Search Title",
@@ -561,7 +571,7 @@ class TestDetailPageParsing:
             meta={"product_id": "B09XYZ1234", "search_item": search_data},
         )
         results = []
-        async for item in spider.parse_product_detail(response):
+        for item in spider.parse_product_detail(response):
             if isinstance(item, AmazonProductItem):
                 results.append(item)
 
@@ -588,18 +598,15 @@ class TestRequestCreation:
     def spider(self):
         return AdvancedAmazonSpider()
 
-    def test_create_request_has_playwright_meta(self, spider):
-        req = spider.create_request("https://www.amazon.com/s?k=laptop&page=1")
-        assert req.meta["playwright"] is True
-        assert "playwright_page_coroutines" in req.meta
-        assert "playwright_context_kwargs" in req.meta
-
-    def test_create_request_has_referer_header(self, spider):
-        req = spider.create_request("https://www.amazon.com/s?k=laptop&page=1")
+    def test_build_request_has_referer_header(self, spider):
+        req = spider._build_request(
+            "https://www.amazon.com/s?k=laptop&page=1",
+            callback=spider.parse,
+        )
         assert req.headers["Referer"] == b"https://www.google.com/"
 
-    def test_create_product_detail_request_dont_filter(self, spider):
-        req = spider.create_product_detail_request(
+    def test_build_detail_request_dont_filter(self, spider):
+        req = spider._build_detail_request(
             "https://www.amazon.com/dp/B09XYZ1234", "B09XYZ1234", {}
         )
         assert req.dont_filter is True
@@ -608,7 +615,7 @@ class TestRequestCreation:
     def test_start_requests_yields_pages(self, spider):
         spider.keyword = "laptop"
         spider.max_pages = 3
-        requests = list(spider.start_requests())
+        requests = list(spider._build_start_requests())
         assert len(requests) == 3
         for i, req in enumerate(requests, 1):
             assert f"page={i}" in req.url
