@@ -139,7 +139,9 @@ class TestSpiderCreation:
 class TestSearchPageParsing:
     @pytest.fixture
     def spider(self):
-        return AdvancedAmazonSpider()
+        s = AdvancedAmazonSpider()
+        s._crawl_detail = False  # fast mode: yield items directly
+        return s
 
     @pytest.fixture
     def search_response(self):
@@ -330,7 +332,9 @@ class TestSearchPageParsing:
 class TestPagination:
     @pytest.fixture
     def spider(self):
-        return AdvancedAmazonSpider()
+        s = AdvancedAmazonSpider()
+        s._crawl_detail = False
+        return s
 
     def make_response(self, html, url="https://www.amazon.com/s?k=laptop&page=1"):
         request = Request(url=url)

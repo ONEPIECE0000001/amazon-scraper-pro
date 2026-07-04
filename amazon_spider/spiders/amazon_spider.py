@@ -24,6 +24,11 @@ class AdvancedAmazonSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         self.retry_times = 3
         self._pending = {}  # asin → search-item, held until detail merge
+        self._crawl_detail = bool(
+            int(getattr(self, "crawl_detail", 1))
+        )
+        self._max_pages = int(getattr(self, "max_pages", 2))
+        self._pages_crawled = 0  # track actual pages crawled
 
         # User-Agent rotation — always set fallback list
         self.user_agents = [
@@ -117,8 +122,10 @@ class AdvancedAmazonSpider(scrapy.Spider):
     def parse(self, response):
         self.logger.info("Parsing search: %s", response.url)
 
+        self._pages_crawled += 1
         products = response.css("[data-component-type='s-search-result']")
-        self.logger.info("Found %d products", len(products))
+        self.logger.info("Found %d products on page %d/%d",
+                         len(products), self._pages_crawled, self._max_pages)
 
         for product in products:
             try:
@@ -190,40 +197,59 @@ class AdvancedAmazonSpider(scrapy.Spider):
                 if not asin:
                     continue
 
-                item = AmazonProductItem()
-                item["asin"] = asin
-                item["title"] = title
-                item["price"] = price
-                item["rating"] = rating
-                item["review_count"] = review_count
-                item["url"] = product_url
-                item["brand"] = None
-                item["category"] = None
-                item["seller_name"] = None
-                item["availability"] = None
-                item["is_prime"] = None
-                item["description"] = None
-                item["original_price"] = None
-                item["image_url"] = None
-                item["date_first_available"] = None
-                item["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Image URL from search result thumbnail
+                image_url = (
+                    product.css(".s-image::attr(src)").get()
+                    or product.css("img.s-image::attr(src)").get()
+                )
 
-                # Yield search data directly (detail page requires more time)
-                yield item
+                # Build search-item payload for detail page merge
+                search_item = {
+                    "asin": asin,
+                    "title": title,
+                    "price": price,
+                    "rating": rating,
+                    "review_count": review_count,
+                    "url": product_url,
+                    "image_url": image_url,
+                    "brand": None,
+                    "category": None,
+                    "seller_name": None,
+                    "availability": None,
+                    "is_prime": None,
+                    "description": None,
+                    "original_price": None,
+                    "date_first_available": None,
+                    "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+                if self._crawl_detail and product_url:
+                    # Defer to detail page for full enrichment
+                    self._pending[asin] = search_item
+                    yield self._build_detail_request(
+                        product_url, asin, search_item
+                    )
+                else:
+                    # Fast mode — yield search data only (detail is skipped)
+                    item = AmazonProductItem()
+                    for f in item.fields:
+                        item[f] = search_item.get(f)
+                    yield item
 
             except Exception:
                 self.logger.error("Error parsing product", exc_info=True)
 
-        # Pagination
-        next_page = response.css(
-            'a[aria-label="Next page"]::attr(href)'
-        ).get()
-        if not next_page:
-            next_page = response.css("li.a-last a::attr(href)").get()
-        if next_page:
-            yield self._build_request(
-                response.urljoin(next_page), callback=self.parse
-            )
+        # Pagination — respect max_pages limit
+        if self._pages_crawled < self._max_pages:
+            next_page = response.css(
+                'a[aria-label="Next page"]::attr(href)'
+            ).get()
+            if not next_page:
+                next_page = response.css("li.a-last a::attr(href)").get()
+            if next_page:
+                yield self._build_request(
+                    response.urljoin(next_page), callback=self.parse
+                )
 
     # ── Detail page ─────────────────────────────────────────────────────
 
@@ -232,16 +258,23 @@ class AdvancedAmazonSpider(scrapy.Spider):
         search_data = response.meta.get("search_item", {})
         self.logger.info("Parsing detail: %s", response.url)
 
-        # Brand
+        # Brand — Amazon 2026: lookup exact "Brand" or "Manufacturer" label
+        # in product details table (avoid partial matches like "Processor Brand")
         brand = None
-        for sel in (
-            "#bylineInfo::text",
-            "#brand::text",
-        ):
-            t = response.css(sel).get()
-            if t and t.strip():
-                brand = t.strip()
-                break
+        for entry in response.css("tr"):
+            label = entry.css("th.prodDetSectionEntry::text").get()
+            if label and label.strip() in ("Brand", "Manufacturer"):
+                value = entry.css("td.prodDetAttrValue::text").get()
+                if value:
+                    brand = value.strip()
+                    break
+        if not brand:
+            # Fallback: old selectors
+            for sel in ("#bylineInfo::text", "#brand::text"):
+                t = response.css(sel).get()
+                if t and t.strip():
+                    brand = t.strip()
+                    break
         if not brand:
             el = response.css("#bylineInfo-container a, #bylineInfo a")
             if el:
@@ -252,17 +285,27 @@ class AdvancedAmazonSpider(scrapy.Spider):
         crumbs = response.css(
             "#wayfinding-breadcrumbs_feature_div ul li span a::text"
         ).getall()
+        if not crumbs:
+            # New 2026 breadcrumb may use different structure
+            crumbs = response.css(
+                "#breadcrumbs_feature_div ul li span a::text"
+            ).getall()
         if crumbs:
             category = " > ".join(c.strip() for c in crumbs if c.strip()) or None
 
-        # Date first available
+        # Date first available — may no longer be in static HTML (2026)
         date_info = None
-        d = response.css(
-            "#productDetails_detailBullets_sections1 "
-            "td:contains('Date First Available') + td::text"
+        # Try product details table first
+        date_info = response.css(
+            "th.prodDetSectionEntry:contains('Release') + td.prodDetAttrValue::text"
         ).get()
-        if d:
-            date_info = d.strip()
+        if not date_info:
+            d = response.css(
+                "#productDetails_detailBullets_sections1 "
+                "td:contains('Date') + td::text"
+            ).get()
+            if d:
+                date_info = d.strip()
         if not date_info:
             labels = response.css("div.content ul li span::text").getall()
             for i, label in enumerate(labels):
@@ -283,8 +326,18 @@ class AdvancedAmazonSpider(scrapy.Spider):
             if m:
                 date_info = m[0]
 
-        # Shipping
-        shipping = response.css("#deliveryMessageMirId::text").get()
+        # Shipping — Amazon 2026: delivery info in data attributes
+        shipping = None
+        delivery_el = response.css(
+            "#deliveryBlockMessage [data-csa-c-delivery-price]"
+        )
+        if delivery_el:
+            price = delivery_el.attrib.get("data-csa-c-delivery-price", "")
+            time_ = delivery_el.attrib.get("data-csa-c-delivery-time", "")
+            parts = [p for p in [price, time_] if p]
+            shipping = " — ".join(parts) if parts else None
+        if not shipping:
+            shipping = response.css("#deliveryMessageMirId::text").get()
         if not shipping:
             shipping = response.css("#exportsBuyBox_feature_div span::text").get()
         if shipping:
