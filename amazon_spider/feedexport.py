@@ -7,6 +7,7 @@ from scrapy.exporters import CsvItemExporter
 
 # Mapping: English field name → Chinese header (with English in parentheses)
 HEADER_MAP = {
+    "keyword": "搜索关键词(keyword)",
     "asin": "商品ID(asin)",
     "title": "商品标题(title)",
     "price": "价格(price)",
@@ -28,6 +29,7 @@ HEADER_MAP = {
 
 # Fixed column order for CSV output (most important fields first)
 FIELD_ORDER = [
+    "keyword",
     "asin", "title", "price", "original_price", "rating", "review_count",
     "brand", "category", "seller_name", "availability", "is_prime",
     "description", "date_first_available",

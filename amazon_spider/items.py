@@ -2,6 +2,7 @@ import scrapy
 
 
 class AmazonProductItem(scrapy.Item):
+    keyword = scrapy.Field()
     asin = scrapy.Field()
     title = scrapy.Field()
     price = scrapy.Field()

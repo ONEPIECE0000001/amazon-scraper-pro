@@ -127,11 +127,22 @@ class SQLitePipeline:
 
         import sqlite3
         self.conn = sqlite3.connect(self.db_path)
-        self.conn.execute("PRAGMA journal_mode=WAL")  # better concurrent perf
+        self.conn.execute("PRAGMA journal_mode=WAL")
+
+        # Auto-migrate: drop table if schema is missing 'keyword' column
+        try:
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(products)")}
+            if cols and 'keyword' not in cols:
+                logger.info("SQLite: old schema detected, recreating table")
+                self.conn.execute("DROP TABLE IF EXISTS products")
+        except sqlite3.OperationalError:
+            pass
+
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                asin        TEXT    NOT NULL UNIQUE,
+                keyword     TEXT    NOT NULL DEFAULT '',
+                asin        TEXT    NOT NULL,
                 title       TEXT,
                 price       REAL,
                 original_price REAL,
@@ -147,17 +158,13 @@ class SQLitePipeline:
                 description TEXT,
                 date_first_available TEXT,
                 scraped_at  TEXT,
-                created_at  TEXT DEFAULT (datetime('now'))
+                created_at  TEXT DEFAULT (datetime('now')),
+                UNIQUE(keyword, asin)
             )
         """)
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_asin ON products(asin)"
-        )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_keyword ON products(category)"
-        )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_asin ON products(asin)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_keyword ON products(keyword)")
         self.conn.commit()
-        logger.info(f"SQLite connected: {self.db_path}")
 
     def process_item(self, item: scrapy.Item, spider: scrapy.Spider) -> scrapy.Item:
         if not self.enabled:
@@ -167,20 +174,24 @@ class SQLitePipeline:
         try:
             self.conn.execute("""
                 INSERT INTO products
-                    (asin, title, price, original_price, rating, review_count,
+                    (keyword, asin, title, price, original_price, rating, review_count,
                      brand, category, seller_name, availability, is_prime,
                      url, image_url, description, date_first_available, scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(asin) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(keyword, asin) DO UPDATE SET
+                    title       = excluded.title,
                     price       = excluded.price,
                     original_price = excluded.original_price,
                     rating      = excluded.rating,
                     review_count = excluded.review_count,
+                    brand       = excluded.brand,
+                    category    = excluded.category,
                     availability = excluded.availability,
                     is_prime    = excluded.is_prime,
+                    image_url   = excluded.image_url,
                     scraped_at  = excluded.scraped_at
             """, (
-                item.get('asin'), item.get('title'), item.get('price'),
+                item.get('keyword', ''), item.get('asin'), item.get('title'), item.get('price'),
                 item.get('original_price'), item.get('rating'), item.get('review_count'),
                 item.get('brand'), item.get('category'), item.get('seller_name'),
                 item.get('availability'), item.get('is_prime'),

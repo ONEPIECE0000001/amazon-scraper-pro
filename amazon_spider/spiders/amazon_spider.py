@@ -79,6 +79,7 @@ class AdvancedAmazonSpider(scrapy.Spider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.retry_times = 3
+        self.keyword = getattr(self, 'keyword', None) or kwargs.get('keyword', '')
         self._pending = {}
         self._crawl_detail = bool(int(getattr(self, "crawl_detail", 1)))
         self._max_pages = int(getattr(self, "max_pages", 2))
@@ -263,6 +264,7 @@ class AdvancedAmazonSpider(scrapy.Spider):
 
                 # Build search-item payload for detail page merge
                 search_item = {
+                    "keyword": getattr(self, "keyword", ""),
                     "asin": asin,
                     "title": title,
                     "price": price,
@@ -391,6 +393,7 @@ class AdvancedAmazonSpider(scrapy.Spider):
             item = AmazonProductItem()
             for f in item.fields:
                 item[f] = search_data.get(f)
+            item["keyword"] = getattr(self, "keyword", "")
 
         item["brand"] = brand
         item["category"] = category
