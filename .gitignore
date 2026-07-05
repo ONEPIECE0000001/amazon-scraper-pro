@@ -1,4 +1,4 @@
-# Python
+# ── Python ──────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,63 +20,72 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# ── Virtual environments ────────────────────────────────────────────────
 venv/
 env/
 ENV/
+.venv/
 
-# IDE
+# ── IDE ─────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
+.trae/
 
-# OS
+# ── OS ──────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+*.bak
 
-# Data files
+# ── Data files (generated / sensitive) ──────────────────────────────────
 *.xlsx
 *.csv
 *.json
 *.db
 *.log
+output/
 
-# Scrapy
+# ── Scrapy ──────────────────────────────────────────────────────────────
 scrapy.log
 items.json
 
-# Playwright
+# ── Playwright ──────────────────────────────────────────────────────────
 .playwright/
 
-# Local configuration
+# ── Local configuration (contains credentials / proxy info) ─────────────
 .env
 config.json
 proxy_config.json
 
-# PyInstaller
+# ── PyInstaller ─────────────────────────────────────────────────────────
 *.spec
 
-# Coverage
+# ── Coverage ────────────────────────────────────────────────────────────
 .coverage
 htmlcov/
+coverage.xml
 
-# Distribution
+# ── Distribution ────────────────────────────────────────────────────────
 *.tar.gz
 *.tar.bz2
 
-# Environment specific
+# ── Environment specific ────────────────────────────────────────────────
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Debug artifacts
+# ── Debug artifacts ─────────────────────────────────────────────────────
 debug_*.html
 pw_*.html
 pw_full.html
 amazon_page.png
 
-# Output data
-output/
+# ── Testing ─────────────────────────────────────────────────────────────
+.pytest_cache/
+
+# ── Project-specific ────────────────────────────────────────────────────
 *.sqlite3
+conversation-summary-*.md
+amazon-spider-完成情况报告-*.md
