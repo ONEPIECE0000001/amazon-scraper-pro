@@ -3,7 +3,7 @@
 import sqlite3
 import os
 from urllib.parse import urlencode
-from flask import Flask, render_template_string, request, g
+from flask import Flask, render_template_string, request, g, jsonify
 
 DATABASE = os.environ.get('SQLITE_PATH', 'amazon_data.db')
 PER_PAGE = 30
@@ -20,63 +20,107 @@ TEMPLATE = r'''<!DOCTYPE html>
 <title>Amazon Spider — 商品数据</title>
 <style>
   :root {
-    --bg: #f0f2f5;
-    --card: #fff;
-    --text: #1a1a2e;
-    --muted: #6b7280;
-    --accent: #2563eb;
-    --accent-hover: #1d4ed8;
-    --green: #059669;
-    --yellow: #d97706;
-    --red: #dc2626;
-    --border: #e5e7eb;
-    --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+    --bg: #f0f2f5; --card: #fff; --text: #1a1a2e; --muted: #6b7280;
+    --accent: #2563eb; --accent-hover: #1d4ed8;
+    --green: #059669; --yellow: #d97706; --red: #dc2626;
+    --border: #e5e7eb; --shadow: 0 1px 3px rgba(0,0,0,.06);
     --radius: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
          background: var(--bg); color: var(--text); min-height: 100vh; }
 
-  /* ── header ── */
-  .header { background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-            color: #fff; padding: 24px 0; }
-  .header-inner { max-width: 1400px; margin: 0 auto; padding: 0 24px;
-                  display: flex; align-items: center; justify-content: space-between; }
-  .header h1 { font-size: 1.3rem; font-weight: 600; }
-  .header .sub { font-size: .78rem; color: #94a3b8; margin-top: 2px; }
+  /* ── top navbar ── */
+  .navbar { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #fff; padding: 0 24px; position: sticky; top: 0; z-index: 100; }
+  .navbar-inner { max-width: 1400px; margin: 0 auto; display: flex;
+                  align-items: center; height: 52px; gap: 24px; }
+  .navbar .logo { font-size: 1.05rem; font-weight: 700; white-space: nowrap;
+                  display: flex; align-items: center; gap: 8px; }
+  .navbar .logo .icon { font-size: 1.3rem; }
+  .navbar nav { display: flex; gap: 4px; flex: 1; }
+  .navbar nav a { color: #94a3b8; text-decoration: none; padding: 6px 14px;
+                  border-radius: 6px; font-size: .82rem; font-weight: 500;
+                  display: flex; align-items: center; gap: 6px;
+                  transition: background .15s, color .15s; }
+  .navbar nav a:hover { background: rgba(255,255,255,.08); color: #e2e8f0; }
+  .navbar nav a.active { background: rgba(255,255,255,.12); color: #fff; }
+  .navbar .db-badge { font-size: .72rem; color: #94a3b8; display: flex;
+    align-items: center; gap: 6px; white-space: nowrap; }
+  .navbar .db-badge .dot { width: 7px; height: 7px; border-radius: 50%;
+    background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,.5); flex-shrink: 0; }
+  .navbar .db-badge .db-path { max-width: 140px; overflow: hidden;
+    text-overflow: ellipsis; }
+
+  /* ── breadcrumb ── */
+  .breadcrumb { max-width: 1400px; margin: 0 auto; padding: 12px 24px 0;
+                font-size: .78rem; color: var(--muted); }
+  .breadcrumb a { color: var(--accent); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .breadcrumb span { color: var(--muted); }
+
+  /* ── page title ── */
+  .page-title-row { max-width: 1400px; margin: 0 auto; padding: 14px 24px 0;
+                    display: flex; align-items: baseline; justify-content: space-between; }
+  .page-title-row h2 { font-size: 1.15rem; font-weight: 600; }
+  .page-title-row .meta { font-size: .78rem; color: var(--muted); }
 
   /* ── stats bar ── */
-  .statbar { max-width: 1400px; margin: -16px auto 20px; padding: 0 24px;
+  .statbar { max-width: 1400px; margin: 12px auto 16px; padding: 0 24px;
              display: flex; gap: 12px; flex-wrap: wrap; }
-  .statcard { background: var(--card); padding: 14px 20px; border-radius: var(--radius);
-              box-shadow: var(--shadow); flex: 1; min-width: 140px; }
-  .statcard .val { font-size: 1.5rem; font-weight: 700; }
-  .statcard .lbl { font-size: .73rem; color: var(--muted); margin-top: 2px; }
-  .val.blue { color: var(--accent); }
-  .val.green { color: var(--green); }
+  .statcard { background: var(--card); padding: 12px 18px; border-radius: var(--radius);
+              box-shadow: var(--shadow); flex: 1; min-width: 130px;
+              display: flex; align-items: center; gap: 10px; }
+  .statcard .icon { font-size: 1.4rem; width: 36px; height: 36px; border-radius: 8px;
+                    display: flex; align-items: center; justify-content: center;
+                    flex-shrink: 0; }
+  .statcard .icon.blue   { background: #dbeafe; }
+  .statcard .icon.green  { background: #d1fae5; }
+  .statcard .icon.yellow { background: #fef3c7; }
+  .statcard .icon.purple { background: #ede9fe; }
+  .statcard .icon.red    { background: #fee2e2; }
+  .statcard .val { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+  .statcard .lbl { font-size: .7rem; color: var(--muted); }
+  .val.blue   { color: var(--accent); }
+  .val.green  { color: var(--green); }
   .val.yellow { color: var(--yellow); }
+  .val.red    { color: var(--red); }
+  .val.purple { color: #7c3aed; }
 
   /* ── main content ── */
   .main { max-width: 1400px; margin: 0 auto; padding: 0 24px 40px; }
 
   /* ── filters ── */
-  .filter-bar { background: var(--card); padding: 16px 20px; border-radius: var(--radius);
-                box-shadow: var(--shadow); margin-bottom: 16px;
-                display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  .filter-bar input, .filter-bar select, .filter-bar button {
+  .filter-bar { background: var(--card); padding: 14px 18px; border-radius: var(--radius);
+                box-shadow: var(--shadow); margin-bottom: 14px;
+                display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .filter-bar .search-wrap { flex: 1; min-width: 200px; position: relative; }
+  .filter-bar .search-wrap .search-icon { position: absolute; left: 10px; top: 50%;
+    transform: translateY(-50%); color: var(--muted); font-size: .85rem; pointer-events: none; }
+  .filter-bar .search-wrap input { width: 100%; padding: 8px 14px 8px 32px;
+    border: 1px solid var(--border); border-radius: 6px; font-size: .83rem; outline: none; }
+  .filter-bar input, .filter-bar button {
     padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px;
     font-size: .83rem; outline: none; }
-  .filter-bar input:focus, .filter-bar select:focus { border-color: var(--accent); }
+  .filter-bar input:focus, .filter-bar .search-wrap input:focus { border-color: var(--accent); }
   .filter-bar button { background: var(--accent); color: #fff; border: none;
                        cursor: pointer; font-weight: 500; white-space: nowrap; }
   .filter-bar button:hover { background: var(--accent-hover); }
-  .filter-bar input[type=number] { width: 90px; }
-  .filter-bar .spacer { flex: 1; }
-  .filter-bar .keyword-tag { display: inline-block; background: #dbeafe; color: var(--accent);
-    padding: 4px 10px; border-radius: 20px; font-size: .75rem; font-weight: 500;
-    cursor: pointer; text-decoration: none; }
-  .filter-bar .keyword-tag:hover { background: #bfdbfe; }
-  .filter-bar .keyword-tag.active { background: var(--accent); color: #fff; }
+  .filter-bar button.ghost { background: transparent; color: var(--muted);
+                              border: 1px solid var(--border); }
+  .filter-bar button.ghost:hover { background: #f1f5f9; color: var(--text); }
+  .filter-bar input[type=number] { width: 95px; }
+
+  /* ── keyword tags ── */
+  .kw-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+            width: 100%; margin-top: 2px; }
+  .kw-bar .kw-label { font-size: .73rem; color: var(--muted); flex-shrink: 0; }
+  .kw-bar a { text-decoration: none; font-size: .75rem; padding: 4px 12px;
+              border-radius: 20px; font-weight: 500; transition: all .15s;
+              background: #f1f5f9; color: #475569; }
+  .kw-bar a:hover { background: #dbeafe; color: var(--accent); }
+  .kw-bar a.active { background: var(--accent); color: #fff; }
+  .kw-bar a.active::before { content: '\\25CF '; font-size: .5rem; vertical-align: middle; }
 
   /* ── product cards ── */
   .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
@@ -94,11 +138,10 @@ TEMPLATE = r'''<!DOCTYPE html>
                  overflow: hidden; }
   .card .title a { color: var(--text); text-decoration: none; }
   .card .title a:hover { color: var(--accent); }
-  .card .meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: .78rem;
+  .card .meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: .78rem;
                 color: var(--muted); }
   .card .meta span { white-space: nowrap; }
   .card .price { font-size: 1.2rem; font-weight: 700; color: var(--red); }
-  .card .price.free { color: var(--green); font-size: .9rem; }
   .card .stars { color: #f59e0b; font-weight: 600; }
   .card .prime { color: var(--green); font-weight: 600; font-size: .75rem; }
   .card .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
@@ -106,21 +149,6 @@ TEMPLATE = r'''<!DOCTYPE html>
                background: #f1f5f9; color: #475569; white-space: nowrap; }
   .card .tag.brand { background: #fef3c7; color: #92400e; }
   .card .tag.keyword { background: #dbeafe; color: #1e40af; }
-
-  /* ── table (alt view) ── */
-  .view-toggle { font-size: .8rem; color: var(--muted); margin-left: auto; }
-  .view-toggle a { color: var(--accent); text-decoration: none; margin: 0 4px; }
-  .view-toggle a.active { font-weight: 600; color: var(--text); }
-  table { width: 100%; border-collapse: collapse; background: var(--card);
-          border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
-  th, td { padding: 10px 14px; text-align: left; font-size: .8rem;
-           border-bottom: 1px solid var(--border); white-space: nowrap; }
-  th { background: #f8fafc; font-weight: 600; color: var(--muted); position: sticky; top: 0; }
-  td.title-col { max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
-  td.title-col a { color: var(--text); text-decoration: none; }
-  td.title-col a:hover { color: var(--accent); }
-  img.thumb { width: 40px; height: 40px; object-fit: contain; border-radius: 4px;
-              background: #f0f0f0; }
 
   /* ── pagination ── */
   .pager { display: flex; gap: 6px; margin-top: 20px; justify-content: center;
@@ -135,49 +163,94 @@ TEMPLATE = r'''<!DOCTYPE html>
   /* ── empty ── */
   .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
   .empty .icon { font-size: 3rem; margin-bottom: 12px; }
+
+  /* ── responsive ── */
+  @media (max-width: 640px) {
+    .navbar nav a { padding: 6px 10px; font-size: .76rem; }
+    .navbar .db-badge .db-path { display: none; }
+    .statcard { min-width: 100px; padding: 10px 14px; }
+    .statcard .val { font-size: 1.1rem; }
+    .product-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div class="header-inner">
-    <div>
-      <h1>📦 Amazon Spider</h1>
-      <div class="sub">商品数据浏览 · 共 {{ total }} 条记录</div>
-    </div>
-    <div style="font-size:.8rem;color:#94a3b8;">
-      DB: {{ dbfile }} &nbsp;|&nbsp;
-      <a href="/" style="color:#94a3b8;">🔄 刷新</a>
+<!-- top navbar -->
+<nav class="navbar">
+  <div class="navbar-inner">
+    <a href="/" class="logo" style="color:#fff;text-decoration:none;">
+      <span class="icon">🕷</span> Amazon Spider
+    </a>
+    <nav>
+      <a href="/" class="active">📦 商品浏览</a>
+      <a href="/dashboard">📊 驾驶舱</a>
+    </nav>
+    <div class="db-badge" title="数据库: {{ dbfile }}">
+      <span class="dot"></span>
+      <span class="db-path">{{ dbfile }}</span>
+      <span style="color:#94a3b8;">· {{ total }} 条</span>
     </div>
   </div>
+</nav>
+
+<!-- breadcrumb -->
+<div class="breadcrumb">
+  <a href="/">首页</a> <span>›</span> 商品浏览
+  {% if cur_kw %}<span> › {{ cur_kw }}</span>{% endif %}
 </div>
 
+<!-- page title -->
+<div class="page-title-row">
+  <h2>商品数据</h2>
+  <span class="meta">共 {{ total }} 条记录</span>
+</div>
+
+<!-- stats -->
 <div class="statbar">
-  <div class="statcard"><div class="val blue">{{ total }}</div><div class="lbl">总商品</div></div>
-  <div class="statcard"><div class="val green">{{ with_price }}</div><div class="lbl">有价格</div></div>
-  <div class="statcard"><div class="val yellow">{{ with_rating }}</div><div class="lbl">有评分</div></div>
-  <div class="statcard"><div class="val blue">{{ avg_price }}</div><div class="lbl">均价(USD)</div></div>
-  <div class="statcard"><div class="val green">{{ keywords|length }}</div><div class="lbl">关键词数</div></div>
+  <div class="statcard">
+    <div class="icon blue">🛒</div>
+    <div><div class="val blue">{{ total }}</div><div class="lbl">总商品</div></div>
+  </div>
+  <div class="statcard">
+    <div class="icon green">💲</div>
+    <div><div class="val green">{{ with_price }}</div><div class="lbl">有价格</div></div>
+  </div>
+  <div class="statcard">
+    <div class="icon yellow">⭐</div>
+    <div><div class="val yellow">{{ with_rating }}</div><div class="lbl">有评分</div></div>
+  </div>
+  <div class="statcard">
+    <div class="icon purple">📊</div>
+    <div><div class="val purple">{{ avg_price }}</div><div class="lbl">均价 (USD)</div></div>
+  </div>
+  <div class="statcard">
+    <div class="icon red">🔑</div>
+    <div><div class="val red">{{ keywords|length }}</div><div class="lbl">关键词数</div></div>
+  </div>
 </div>
 
 <div class="main">
 
   <!-- filter bar -->
   <form class="filter-bar" method="get">
-    <input name="q" value="{{ query }}" placeholder="🔍 搜索标题 / ASIN / 品牌 …" style="flex:1; min-width:200px;">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input name="q" value="{{ query }}" placeholder="搜索标题 / ASIN / 品牌 …">
+    </div>
     <input type="number" name="min_price" value="{{ min_price }}" placeholder="最低价">
     <input type="number" name="max_price" value="{{ max_price }}" placeholder="最高价">
     <input type="number" name="min_rating" value="{{ min_rating }}" placeholder="最低评分" step="0.5">
-    <button type="submit">筛 选</button>
+    <button type="submit">筛选</button>
     {% if query or min_price or max_price or min_rating or cur_kw %}
-    <a href="/" style="font-size:.8rem;color:var(--muted);align-self:center;">清除筛选</a>
+    <a href="/"><button type="button" class="ghost">清除</button></a>
     {% endif %}
 
     {% if keywords %}
-    <div style="width:100%;display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
-      <span style="font-size:.75rem;color:var(--muted);align-self:center;">关键词:</span>
+    <div class="kw-bar">
+      <span class="kw-label">关键词:</span>
       {% for kw in keywords %}
-      <a href="?kw={{ kw }}" class="keyword-tag {% if cur_kw == kw %}active{% endif %}">{{ kw }}</a>
+      <a href="?kw={{ kw }}" class="{% if cur_kw == kw %}active{% endif %}">{{ kw }}</a>
       {% endfor %}
     </div>
     {% endif %}
@@ -232,7 +305,7 @@ TEMPLATE = r'''<!DOCTYPE html>
       </div>
       <div class="tags" style="margin-top:2px;">
         {% if r.bsr %}
-        <span class="tag" style="background:#fef2f2;color:#991b1b;" title="Best Sellers Rank">📊 BSR: {{ r.bsr[:60] }}</span>
+        <span class="tag" style="background:#fef2f2;color:#991b1b;" title="Best Sellers Rank">📊 {{ r.bsr[:60] }}</span>
         {% endif %}
         {% if r.coupon_text %}
         <span class="tag" style="background:#fef7ed;color:#b45309;">🏷 {{ r.coupon_text[:40] }}</span>
@@ -255,7 +328,6 @@ TEMPLATE = r'''<!DOCTYPE html>
   <div class="empty">
     <div class="icon">🔍</div>
     <p>没有匹配的商品，换个关键词试试</p>
-    <p style="font-size:.8rem;">数据库路径: {{ dbfile }}</p>
   </div>
   {% endif %}
 
@@ -443,6 +515,509 @@ def _build_page_range(page, total):
         pages.append('…')
     pages.append(total)
     return pages
+
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+
+DASHBOARD_TEMPLATE = r'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运营驾驶舱 — Amazon Spider</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f0f2f5; --card: #fff; --text: #1a1a2e; --muted: #6b7280;
+    --accent: #2563eb; --green: #059669; --yellow: #d97706; --red: #dc2626;
+    --border: #e5e7eb; --shadow: 0 1px 3px rgba(0,0,0,.06);
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── shared navbar (same as 商品浏览) ── */
+  .navbar { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #fff; padding: 0 24px; position: sticky; top: 0; z-index: 100; }
+  .navbar-inner { max-width: 1400px; margin: 0 auto; display: flex;
+                  align-items: center; height: 52px; gap: 24px; }
+  .navbar .logo { font-size: 1.05rem; font-weight: 700; white-space: nowrap;
+                  display: flex; align-items: center; gap: 8px; }
+  .navbar .logo .icon { font-size: 1.3rem; }
+  .navbar nav { display: flex; gap: 4px; flex: 1; }
+  .navbar nav a { color: #94a3b8; text-decoration: none; padding: 6px 14px;
+                  border-radius: 6px; font-size: .82rem; font-weight: 500;
+                  display: flex; align-items: center; gap: 6px;
+                  transition: background .15s, color .15s; }
+  .navbar nav a:hover { background: rgba(255,255,255,.08); color: #e2e8f0; }
+  .navbar nav a.active { background: rgba(255,255,255,.12); color: #fff; }
+  .navbar .db-badge { font-size: .72rem; color: #94a3b8; display: flex;
+    align-items: center; gap: 6px; white-space: nowrap; }
+  .navbar .db-badge .dot { width: 7px; height: 7px; border-radius: 50%;
+    background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,.5); flex-shrink: 0; }
+  .breadcrumb { max-width: 1400px; margin: 0 auto; padding: 12px 24px 0;
+                font-size: .78rem; color: var(--muted); }
+  .breadcrumb a { color: var(--accent); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .breadcrumb span { color: var(--muted); }
+
+  .main { max-width: 1400px; margin: 0 auto; padding: 20px 24px 40px; }
+
+  /* tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+  .tabs a { padding: 8px 20px; border-radius: 6px 6px 0 0; font-size: .85rem;
+            text-decoration: none; color: var(--muted); background: #e2e8f0; }
+  .tabs a.active { background: var(--card); color: var(--text); font-weight: 600; }
+
+  /* panels */
+  .panel { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+           padding: 20px; margin-bottom: 16px; }
+  .panel h2 { font-size: 1rem; margin-bottom: 12px; color: var(--text); }
+  .panel .sub { font-size: .75rem; color: var(--muted); margin-bottom: 12px; }
+
+  /* grid */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  /* stat cards */
+  .kpi { text-align: center; }
+  .kpi .num { font-size: 1.8rem; font-weight: 700; }
+  .kpi .lbl { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+  .kpi .num.blue { color: var(--accent); }
+  .kpi .num.green { color: var(--green); }
+  .kpi .num.yellow { color: var(--yellow); }
+  .kpi .num.red { color: var(--red); }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; background: #f8fafc; }
+  tr:hover { background: #f8fafc; }
+
+  /* opportunity cards */
+  .opp-card { border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+              transition: box-shadow .15s; }
+  .opp-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+  .opp-card .t { font-weight: 600; font-size: .85rem; margin-bottom: 6px;
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .opp-card .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .opp-card .tag { font-size: .7rem; padding: 2px 8px; border-radius: 4px; }
+  .tag.gold { background: #fef3c7; color: #92400e; }
+  .tag.blue { background: #dbeafe; color: #1e40af; }
+  .tag.green { background: #d1fae5; color: #065f46; }
+
+  /* selector */
+  .sel-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+             margin-bottom: 12px; }
+  .sel-row select, .sel-row input, .sel-row button { padding: 6px 12px; border: 1px solid
+    var(--border); border-radius: 6px; font-size: .82rem; }
+  .sel-row button { background: var(--accent); color: #fff; border: none; cursor: pointer; }
+
+  canvas { max-height: 300px; }
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-inner">
+    <a href="/" class="logo" style="color:#fff;text-decoration:none;">
+      <span class="icon">🕷</span> Amazon Spider
+    </a>
+    <nav>
+      <a href="/">📦 商品浏览</a>
+      <a href="/dashboard" class="active">📊 驾驶舱</a>
+    </nav>
+    <div class="db-badge">
+      <span class="dot"></span>
+      <span style="color:#94a3b8;">数据已连接</span>
+    </div>
+  </div>
+</nav>
+
+<div class="breadcrumb">
+  <a href="/">首页</a> <span>›</span> <a href="/dashboard">运营驾驶舱</a>
+</div>
+
+<div class="main" style="margin-top:14px;">
+
+<div class="grid-3">
+  <div class="panel kpi"><div class="num blue" id="kpi-total">-</div><div class="lbl">商品总数</div></div>
+  <div class="panel kpi"><div class="num green" id="kpi-bsr">-</div><div class="lbl">有 BSR 排名商品</div></div>
+  <div class="panel kpi"><div class="num yellow" id="kpi-opps">-</div><div class="lbl">发现机会品</div></div>
+</div>
+
+<div class="sel-row">
+  <label>关键词:</label>
+  <select id="kw-select" onchange="loadAll()">
+    <option value="">全部</option>
+  </select>
+  <label>商品:</label>
+  <select id="asin-select" onchange="loadPriceHistory()">
+    <option value="">选择商品看价格走势…</option>
+  </select>
+  <button onclick="loadAll()">刷新</button>
+</div>
+
+<!-- 价格走势 -->
+<div class="panel">
+  <h2>📈 价格走势</h2>
+  <div class="sub" id="price-sub">选择一个商品查看价格历史</div>
+  <canvas id="priceChart" height="200"></canvas>
+</div>
+
+<div class="grid-2">
+  <!-- BSR 排行 -->
+  <div class="panel">
+    <h2>🏆 BSR 排行</h2>
+    <div class="sub" id="bsr-sub"></div>
+    <table><thead><tr><th>#</th><th>商品</th><th>BSR</th><th>价格</th><th>评分</th></tr></thead>
+    <tbody id="bsr-tbody"></tbody></table>
+  </div>
+
+  <!-- 竞品雷达 -->
+  <div class="panel">
+    <h2>🎯 竞品雷达</h2>
+    <div class="sub" id="radar-sub"></div>
+    <canvas id="radarChart" height="250"></canvas>
+  </div>
+</div>
+
+<!-- 机会发现 -->
+<div class="panel">
+  <h2>💡 机会发现</h2>
+  <div class="sub">高评分低评论 = 新品黑马 · 高评分高评论低价格 = 性价比标杆</div>
+  <div class="grid-3" id="opps-grid" style="margin-top:12px;"></div>
+</div>
+
+</div>
+
+<script>
+let priceChart = null, radarChart = null;
+let keywordList = [];
+let currentKw = '';
+
+// ── load keyword dropdown ──
+async function init() {
+  const r = await fetch('/api/keywords');
+  const data = await r.json();
+  keywordList = data.keywords || [];
+  const sel = document.getElementById('kw-select');
+  keywordList.forEach(kw => {
+    const o = document.createElement('option');
+    o.value = kw; o.textContent = kw;
+    sel.appendChild(o);
+  });
+  // Also populate asin dropdown
+  await loadAsins();
+  loadAll();
+}
+
+async function loadAsins() {
+  const kw = document.getElementById('kw-select').value;
+  const url = kw ? '/api/products?kw=' + encodeURIComponent(kw) : '/api/products';
+  const r = await fetch(url);
+  const data = await r.json();
+  const sel = document.getElementById('asin-select');
+  sel.innerHTML = '<option value="">选择商品看价格走势…</option>';
+  (data.products || []).forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.asin;
+    o.textContent = (p.brand ? '['+p.brand+'] ' : '') + p.title.slice(0, 60);
+    sel.appendChild(o);
+  });
+}
+
+async function loadAll() {
+  currentKw = document.getElementById('kw-select').value;
+  await Promise.all([loadAsins(), loadKPIs(), loadBSR(), loadCompetitors(), loadOpportunities()]);
+}
+
+// ── KPIs ──
+async function loadKPIs() {
+  const kw = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
+  const r = await fetch('/api/stats' + kw);
+  const d = await r.json();
+  document.getElementById('kpi-total').textContent = d.total || 0;
+  document.getElementById('kpi-bsr').textContent = d.with_bsr || 0;
+  document.getElementById('kpi-opps').textContent = d.opportunities || 0;
+}
+
+// ── Price history chart ──
+async function loadPriceHistory() {
+  const asin = document.getElementById('asin-select').value;
+  if (!asin) {
+    document.getElementById('price-sub').textContent = '选择一个商品查看价格历史';
+    if (priceChart) { priceChart.destroy(); priceChart = null; }
+    return;
+  }
+  const r = await fetch('/api/price-history?asin=' + asin);
+  const data = await r.json();
+  const pts = data.points || [];
+  if (pts.length === 0) {
+    document.getElementById('price-sub').textContent = '暂无历史数据（需要多次爬取同一商品）';
+    return;
+  }
+  document.getElementById('price-sub').textContent =
+    data.title + ' — ' + pts.length + ' 次采集记录';
+
+  const ctx = document.getElementById('priceChart').getContext('2d');
+  if (priceChart) priceChart.destroy();
+  priceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.time),
+      datasets: [{
+        label: '价格 (USD)',
+        data: pts.map(p => p.price),
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37,99,235,0.08)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: false, title: { display: true, text: 'USD' } },
+        x: { title: { display: true, text: '采集时间' } }
+      }
+    }
+  });
+}
+
+// ── BSR ranking ──
+async function loadBSR() {
+  const kw = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
+  const r = await fetch('/api/bsr-top' + kw);
+  const data = await r.json();
+  const rows = data.ranking || [];
+  document.getElementById('bsr-sub').textContent =
+    (currentKw || '全部关键词') + ' · 共 ' + rows.length + ' 个有BSR商品';
+  const tbody = document.getElementById('bsr-tbody');
+  tbody.innerHTML = rows.map((r, i) =>
+    '<tr><td>' + (i+1) + '</td><td title="' + r.title + '">' +
+    r.title.slice(0, 35) + '</td><td>' + r.bsr + '</td><td>$' +
+    (r.price||'-') + '</td><td>' + (r.rating ? '★'+r.rating : '-') + '</td></tr>'
+  ).join('') || '<tr><td colspan="5">暂无BSR数据</td></tr>';
+}
+
+// ── Competitor radar ──
+async function loadCompetitors() {
+  const kw = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
+  const r = await fetch('/api/competitors' + kw);
+  const data = await r.json();
+  const brands = data.brands || [];
+  document.getElementById('radar-sub').textContent =
+    (currentKw || '全部') + ' · ' + brands.length + ' 个品牌';
+
+  const ctx = document.getElementById('radarChart').getContext('2d');
+  if (radarChart) radarChart.destroy();
+  if (brands.length === 0) return;
+
+  const colors = ['#2563eb','#059669','#d97706','#dc2626','#7c3aed','#0891b2',
+                  '#be123c','#4f46e5','#ea580c','#15803d'];
+  radarChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: brands.map(b => b.brand),
+      datasets: [{
+        label: '均价 (USD)',
+        data: brands.map(b => b.avg_price),
+        backgroundColor: colors,
+        yAxisID: 'y',
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => [
+              '均价: $' + (ctx.raw||0).toFixed(2),
+              '均分: ' + (brands[ctx.dataIndex].avg_rating||'-'),
+              '评论: ' + (brands[ctx.dataIndex].avg_reviews||'-'),
+              '商品数: ' + brands[ctx.dataIndex].count,
+            ].join(' | ')
+          }
+        }
+      },
+      scales: {
+        y: { title: { display: true, text: 'USD' }, beginAtZero: false }
+      }
+    }
+  });
+}
+
+// ── Opportunities ──
+async function loadOpportunities() {
+  const r = await fetch('/api/opportunities');
+  const data = await r.json();
+  const opps = data.opportunities || [];
+  const grid = document.getElementById('opps-grid');
+  grid.innerHTML = opps.map(o =>
+    '<div class="opp-card">' +
+    '<div class="t" title="' + o.title + '">' + o.title.slice(0, 50) + '</div>' +
+    '<div style="font-size:.78rem;color:var(--muted);">' +
+    '★ ' + (o.rating||'-') + ' · ' + (o.review_count||0) + '评论 · $' +
+    (o.price||'-') + '</div>' +
+    '<div class="tags">' +
+    '<span class="tag gold">' + (o.reason || '机会品') + '</span>' +
+    (o.keyword ? '<span class="tag blue">' + o.keyword + '</span>' : '') +
+    (o.brand ? '<span class="tag green">' + o.brand + '</span>' : '') +
+    '</div></div>'
+  ).join('') || '<div style="color:var(--muted);">暂无机会发现</div>';
+}
+
+// ── init ──
+init();
+</script>
+</body>
+</html>'''
+
+
+@app.route('/dashboard')
+def dashboard():
+    return render_template_string(DASHBOARD_TEMPLATE)
+
+
+# ── API routes ───────────────────────────────────────────────────────────────
+
+@app.route('/api/keywords')
+def api_keywords():
+    db = get_db()
+    rows = db.execute(
+        "SELECT DISTINCT keyword FROM products WHERE keyword != '' ORDER BY keyword"
+    ).fetchall()
+    return jsonify({'keywords': [r['keyword'] for r in rows]})
+
+
+@app.route('/api/products')
+def api_products():
+    db = get_db()
+    kw = request.args.get('kw', '').strip()
+    if kw:
+        rows = db.execute(
+            "SELECT asin, title, brand, price FROM products WHERE keyword=? ORDER BY scraped_at DESC",
+            (kw,)
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT asin, title, brand, price FROM products ORDER BY scraped_at DESC LIMIT 100"
+        ).fetchall()
+    return jsonify({'products': [dict(r) for r in rows]})
+
+
+@app.route('/api/stats')
+def api_stats():
+    db = get_db()
+    kw = request.args.get('kw', '').strip()
+    where = "WHERE keyword = ?" if kw else ""
+    params = (kw,) if kw else ()
+    total = db.execute(
+        f"SELECT COUNT(*) FROM products {where}", params
+    ).fetchone()[0]
+    with_bsr = db.execute(
+        f"SELECT COUNT(*) FROM products {where} AND bsr IS NOT NULL", params
+    ).fetchone()[0]
+    opps = db.execute(
+        "SELECT COUNT(*) FROM products WHERE rating >= 4.3 AND review_count <= 50"
+    ).fetchone()[0]
+    return jsonify({'total': total, 'with_bsr': with_bsr, 'opportunities': opps})
+
+
+@app.route('/api/price-history')
+def api_price_history():
+    db = get_db()
+    asin = request.args.get('asin', '').strip()
+    if not asin:
+        return jsonify({'points': []})
+    title_row = db.execute(
+        "SELECT title FROM products WHERE asin=?", (asin,)
+    ).fetchone()
+    rows = db.execute(
+        "SELECT price, bsr, scraped_at FROM price_history WHERE asin=? ORDER BY scraped_at ASC",
+        (asin,)
+    ).fetchall()
+    return jsonify({
+        'title': title_row['title'] if title_row else asin,
+        'points': [{'price': r['price'], 'bsr': r['bsr'], 'time': r['scraped_at'][:16]} for r in rows],
+    })
+
+
+@app.route('/api/bsr-top')
+def api_bsr_top():
+    db = get_db()
+    kw = request.args.get('kw', '').strip()
+    if kw:
+        rows = db.execute(
+            """SELECT asin, title, bsr, price, rating FROM products
+               WHERE keyword=? AND bsr IS NOT NULL
+               ORDER BY bsr ASC LIMIT 30""", (kw,)
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT asin, title, bsr, price, rating FROM products WHERE bsr IS NOT NULL ORDER BY bsr ASC LIMIT 30"
+        ).fetchall()
+    return jsonify({'ranking': [dict(r) for r in rows]})
+
+
+@app.route('/api/competitors')
+def api_competitors():
+    db = get_db()
+    kw = request.args.get('kw', '').strip()
+    if kw:
+        rows = db.execute(
+            """SELECT brand, COUNT(*) as count,
+                      ROUND(AVG(price), 2) as avg_price,
+                      ROUND(AVG(rating), 2) as avg_rating,
+                      ROUND(AVG(review_count), 0) as avg_reviews
+               FROM products WHERE keyword=? AND brand IS NOT NULL AND brand != ''
+               GROUP BY brand HAVING count >= 2
+               ORDER BY count DESC LIMIT 10""", (kw,)
+        ).fetchall()
+    else:
+        rows = db.execute(
+            """SELECT brand, COUNT(*) as count,
+                      ROUND(AVG(price), 2) as avg_price,
+                      ROUND(AVG(rating), 2) as avg_rating,
+                      ROUND(AVG(review_count), 0) as avg_reviews
+               FROM products WHERE brand IS NOT NULL AND brand != ''
+               GROUP BY brand HAVING count >= 2
+               ORDER BY count DESC LIMIT 10"""
+        ).fetchall()
+    return jsonify({'brands': [dict(r) for r in rows]})
+
+
+@app.route('/api/opportunities')
+def api_opportunities():
+    db = get_db()
+    # Pattern 1: 新品黑马 — high rating + low reviews (new product growing fast)
+    # Pattern 2: 性价比标杆 — high rating + high reviews + low price
+    rows = db.execute(
+        """SELECT asin, title, keyword, brand, price, rating, review_count,
+                  CASE
+                    WHEN rating >= 4.5 AND review_count <= 30 THEN '新品黑马🐴'
+                    WHEN rating >= 4.3 AND review_count >= 100 AND price < 50 THEN '性价比标杆💰'
+                    WHEN rating >= 4.3 AND review_count <= 80 THEN '潜力新品🌟'
+                    ELSE '高评分⭐'
+                  END as reason
+           FROM products
+           WHERE rating >= 4.3 AND price IS NOT NULL
+           ORDER BY
+             CASE
+               WHEN rating >= 4.5 AND review_count <= 30 THEN 0
+               WHEN rating >= 4.3 AND review_count >= 100 AND price < 50 THEN 1
+               WHEN rating >= 4.3 AND review_count <= 80 THEN 2
+               ELSE 3
+             END, rating DESC
+           LIMIT 15"""
+    ).fetchall()
+    return jsonify({'opportunities': [dict(r) for r in rows]})
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────
