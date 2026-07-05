@@ -304,7 +304,7 @@ class SQLitePipeline:
                 item.get('price'),
                 item.get('bsr'),
                 item.get('review_count'),
-                item.get('scraped_at') or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                item.get('scraped_at') or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
             ))
             self.conn.commit()
         except sqlite3.Error as e:

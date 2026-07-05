@@ -411,6 +411,60 @@ def _ensure_schema(db):
     except sqlite3.OperationalError:
         pass
 
+    # Drop old UNIQUE constraint on price_history — it silently blocks INSERT
+    # when data is unchanged (old schema: UNIQUE(keyword, asin, scraped_at)).
+    # SQLite can't ALTER TABLE DROP CONSTRAINT, so we recreate the table.
+    try:
+        indexes = db.execute("PRAGMA index_list(price_history)").fetchall()
+        has_auto_unique = any(
+            idx[1].startswith('sqlite_autoindex') and idx[2] == 1
+            for idx in indexes
+        )
+        if has_auto_unique:
+            import sys
+            print("  [!] Old UNIQUE constraint detected on price_history - migrating...", file=sys.stderr)
+            existing = db.execute("SELECT * FROM price_history").fetchall()
+            db.execute("DROP TABLE IF EXISTS price_history_old")
+            db.execute("ALTER TABLE price_history RENAME TO price_history_old")
+            db.execute("""
+                CREATE TABLE price_history (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    keyword     TEXT    NOT NULL,
+                    asin        TEXT    NOT NULL,
+                    price       REAL,
+                    bsr         TEXT,
+                    review_count INTEGER,
+                    scraped_at  TEXT    NOT NULL
+                )
+            """)
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ph_asin ON price_history(asin)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ph_keyword ON price_history(keyword)"
+            )
+            # Copy existing data back
+            for row in existing:
+                db.execute(
+                    """INSERT INTO price_history
+                       (id, keyword, asin, price, bsr, review_count, scraped_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (row[0], row[1], row[2], row[3], row[4],
+                     row[6] if len(row) > 6 and row[6] is not None else None,
+                     row[5]),
+                )
+            db.execute("DROP TABLE IF EXISTS price_history_old")
+            db.commit()
+            print(f"  [OK] Migrated {len(existing)} history records - UNIQUE constraint removed", file=sys.stderr)
+    except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+        import sys
+        print(f"  Migration warning: {e}", file=sys.stderr)
+        db.execute("DROP TABLE IF EXISTS price_history_old")
+        try:
+            db.commit()
+        except Exception:
+            pass
+
 
 @app.teardown_appcontext
 def close_db(error):
@@ -1539,22 +1593,22 @@ PRODUCT_TEMPLATE = r'''<!DOCTYPE html>
 
   <!-- ── Post-crawl result banner ── -->
   {% if crawl_result %}
-  <div class="crawl-result-banner {{ 'changed' if crawl_result.has_change else 'nochange' }}">
+  <div class="crawl-result-banner {{ 'changed' if crawl_result.get('has_change') else 'nochange' }}">
     <div class="banner-icon">
-      {% if crawl_result.has_change %}📊{% else %}ℹ️{% endif %}
+      {% if crawl_result.get('has_change') %}📊{% else %}ℹ️{% endif %}
     </div>
     <div class="banner-body">
       <div class="banner-title">
         🔄 重新采集完成
-        {% if crawl_result.has_change %}
+        {% if crawl_result.get('has_change') %}
         — 数据有变化
         {% else %}
         — 数据无变化
         {% endif %}
       </div>
-      {% if crawl_result.has_change %}
+      {% if crawl_result.get('has_change') %}
       <div>
-        {% for ch in crawl_result.changes %}
+        {% for ch in crawl_result.get('changes', []) %}
         <span class="banner-item {{ ch.dir }}">
           {{ ch.label }}: {{ ch.text }}
           <strong>{{ ch.delta }}</strong>
@@ -1567,7 +1621,7 @@ PRODUCT_TEMPLATE = r'''<!DOCTYPE html>
       </div>
       {% endif %}
       <div class="banner-stats">
-        <span>📈 历史记录: {{ crawl_result.record_count }} 条</span>
+        <span>📈 历史记录: {{ crawl_result.get('record_count', 0) }} 条</span>
         <span>🕐 采集时间: {{ scraped_at[:19] if scraped_at else '-' }}</span>
       </div>
     </div>
@@ -1856,7 +1910,7 @@ function showToast(msg, type) {
   var t = document.getElementById('crawl-toast');
   var spinner = document.getElementById('toast-spinner');
   t.className = 'crawl-toast ' + type;
-  document.getElementById('crawl-msg').textContent = msg;
+  document.getElementById('crawl-msg').innerHTML = msg;
   spinner.style.display = (type === 'running') ? '' : 'none';
   t.style.display = 'flex';
 }
@@ -1899,6 +1953,52 @@ async function triggerCrawl(asin) {
   }
 }
 
+async function fetchCrawlCompareText() {
+  // Fetch latest price history and compare last 2 records
+  try {
+    var r = await fetch('/api/price-history?asin={{ asin }}');
+    var data = await r.json();
+    var pts = data.points || [];
+    if (pts.length < 2) {
+      return '✓ 采集完成！仅 ' + pts.length + ' 条记录，暂无法对比';
+    }
+    var last = pts[pts.length - 1];
+    var prev = pts[pts.length - 2];
+    var changes = [];
+
+    // price
+    if (last.price != null && prev.price != null) {
+      var d = (last.price - prev.price).toFixed(2);
+      if (Math.abs(d) > 0.01) {
+        changes.push('💰 价格: $' + prev.price + ' → $' + last.price +
+                     ' (<b style="color:' + (d > 0 ? 'var(--red)' : 'var(--green)') + '">' +
+                     (d > 0 ? '↑+' : '↓-') + '$' + Math.abs(d).toFixed(2) + '</b>)');
+      }
+    }
+
+    // reviews
+    if (last.review_count != null && prev.review_count != null) {
+      var rd = last.review_count - prev.review_count;
+      if (rd !== 0) {
+        changes.push('📝 评论: ' + prev.review_count + ' → ' + last.review_count +
+                     ' (<b>' + (rd > 0 ? '+' : '') + rd + '</b>)');
+      }
+    }
+
+    // BSR
+    if (last.bsr && prev.bsr && last.bsr !== prev.bsr) {
+      changes.push('📊 BSR 有变化');
+    }
+
+    if (changes.length === 0) {
+      return '✓ 采集完成！<b>数据无变化</b> — 价格、BSR、评论数与上次完全一致';
+    }
+    return '✓ 采集完成！' + changes.join('；');
+  } catch(e) {
+    return '✓ 采集完成！页面即将刷新…';
+  }
+}
+
 function pollCrawlStatus(jobId, btn) {
   crawlTimer = setInterval(async () => {
     try {
@@ -1906,12 +2006,16 @@ function pollCrawlStatus(jobId, btn) {
       var d = await r.json();
       if (d.status === 'done') {
         clearInterval(crawlTimer);
-        showToast('✓ 采集完成！页面即将刷新…', 'done');
+        // Show comparison result before redirecting
+        var msg = await fetchCrawlCompareText();
+        showToast(msg, 'done');
+        btn.disabled = false;
+        btn.textContent = '🔄 重新采集';
         setTimeout(() => {
           var url = new URL(location.href);
           url.searchParams.set('crawled', '1');
           location.href = url.toString();
-        }, 1200);
+        }, 3000);
       } else if (d.status === 'error') {
         clearInterval(crawlTimer);
         showToast('采集失败，请查看终端日志', 'error');
@@ -2223,12 +2327,17 @@ def api_price_history():
         "SELECT title FROM products WHERE asin=?", (asin,)
     ).fetchone()
     rows = db.execute(
-        "SELECT price, bsr, scraped_at FROM price_history WHERE asin=? ORDER BY scraped_at ASC",
+        "SELECT price, bsr, review_count, scraped_at FROM price_history WHERE asin=? ORDER BY scraped_at ASC",
         (asin,)
     ).fetchall()
     return jsonify({
         'title': title_row['title'] if title_row else asin,
-        'points': [{'price': r['price'], 'bsr': r['bsr'], 'time': r['scraped_at'][:16]} for r in rows],
+        'points': [{
+            'price': r['price'],
+            'bsr': r['bsr'],
+            'review_count': r['review_count'],
+            'time': r['scraped_at'][:16],
+        } for r in rows],
     })
 
 
