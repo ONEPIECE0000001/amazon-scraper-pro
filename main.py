@@ -22,7 +22,13 @@ if _ENV_PATH.exists():
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Amazon product scraper")
-    parser.add_argument("--keyword", "-k", required=True, help="search keyword")
+    parser.add_argument("--keyword", "-k", default=None, help="search keyword")
+    parser.add_argument("--asin", default=None,
+                        help="single ASIN or comma-separated list (B0XXX,B0YYY)")
+    parser.add_argument("--asin-list", default=None,
+                        help="path to a text file with one ASIN per line")
+    parser.add_argument("--label", default=None,
+                        help="label for keyword column when using --asin (default: asin_direct)")
     parser.add_argument("--pages", "-p", type=int, default=2, help="pages to crawl")
     parser.add_argument("--start-page", type=int, default=1,
                         help="first page number (for batch resume, e.g. --start-page 6 --pages 5)")
@@ -37,6 +43,41 @@ def main() -> None:
         help="fast mode: skip detail pages, only grab search result fields"
     )
     args = parser.parse_args()
+
+    # ── validate: keyword or ASIN required ─────────────────────────────
+    if not args.keyword and not args.asin and not args.asin_list:
+        parser.error("either --keyword or --asin/--asin-list is required")
+
+    # ── resolve ASINs ──────────────────────────────────────────────────
+    asins = []
+    if args.asin:
+        asins.extend(a.strip() for a in args.asin.split(",") if a.strip())
+    if args.asin_list:
+        p = Path(args.asin_list)
+        if not p.exists():
+            print(f"Error: ASIN list file not found: {args.asin_list}")
+            sys.exit(1)
+        with open(p, encoding="utf-8") as f_:
+            for line in f_:
+                a = line.strip()
+                if a and not a.startswith("#"):
+                    asins.append(a)
+
+    if asins:
+        # Validate ASIN format
+        asin_pat = re.compile(r"^[A-Z0-9]{10}$")
+        bad = [a for a in asins if not asin_pat.match(a)]
+        if bad:
+            print(f"Warning: {len(bad)} invalid ASIN(s) skipped: {bad[:5]}")
+            asins = [a for a in asins if asin_pat.match(a)]
+        if not asins:
+            print("Error: no valid ASINs found")
+            sys.exit(1)
+        print(f"ASIN mode: {len(asins)} product(s)")
+        args.keyword = args.label or "asin_direct"
+        args.pages = 1        # ASIN mode: no pagination
+        args.no_detail = False  # always fetch detail for ASIN mode
+        args.crawl_detail = 1
 
     use_proxy = not args.no_proxy
 
@@ -77,6 +118,9 @@ def main() -> None:
         "-s", "FEEDS=",           # clear default feed to avoid duplicate CSV
         "-o", output_file,
     ]
+    if asins:
+        cmd.insert(-2, "-a")
+        cmd.insert(-2, f"asins={','.join(asins)}")
 
     print(f"\nRunning: {' '.join(cmd)}\n")
     try:

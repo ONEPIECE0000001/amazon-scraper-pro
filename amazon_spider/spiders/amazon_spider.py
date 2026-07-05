@@ -80,6 +80,7 @@ class AdvancedAmazonSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         self.retry_times = 3
         self.keyword = getattr(self, 'keyword', None) or kwargs.get('keyword', '')
+        self.asins = getattr(self, 'asins', None) or kwargs.get('asins', '')
         self._pending = {}
         self._crawl_detail = bool(int(getattr(self, "crawl_detail", 1)))
         self._max_pages = int(getattr(self, "max_pages", 2))
@@ -159,6 +160,18 @@ class AdvancedAmazonSpider(scrapy.Spider):
             yield req
 
     def _build_start_requests(self):
+        # ── ASIN mode: skip search, go direct to detail pages ──────────
+        if self.asins:
+            asin_list = [a.strip() for a in self.asins.split(",") if a.strip()]
+            self.logger.info(
+                "ASIN mode: %d product(s) — %s", len(asin_list), ", ".join(asin_list[:5])
+            )
+            for asin in asin_list:
+                url = f"https://www.amazon.com/dp/{asin}"
+                yield self._build_detail_request(url, asin, {})
+            return
+
+        # ── Keyword mode: search → detail ──────────────────────────────
         keyword = getattr(self, "keyword", "laptop")
         pages = int(getattr(self, "max_pages", 2))
         start = int(getattr(self, "start_page", 1))
