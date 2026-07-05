@@ -962,11 +962,12 @@ function onProductSelect(value) {
 
 // ── Dashboard crawl ──────────────────────────────────────────────────
 let dashCrawlTimer = null;
+let dashBeforeStats = null;
 
 function showDashToast(msg, type) {
   var t = document.getElementById('dash-toast');
   t.className = 'crawl-toast ' + type;
-  document.getElementById('dash-crawl-msg').textContent = msg;
+  document.getElementById('dash-crawl-msg').innerHTML = msg;
   document.getElementById('dash-toast-spinner').style.display = (type === 'running') ? '' : 'none';
   t.style.display = 'flex';
 }
@@ -981,6 +982,15 @@ async function triggerDashboardCrawl() {
   btn.disabled = true;
   btn.textContent = '⏳ …';
   showDashToast('采集任务启动中…', 'running');
+
+  // Snapshot stats before crawl for comparison
+  try {
+    var kwParam = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
+    var beforeR = await fetch('/api/stats' + kwParam);
+    dashBeforeStats = await beforeR.json();
+  } catch(e) {
+    dashBeforeStats = null;
+  }
 
   var body = {};
   if (currentKw) body.keyword = currentKw;
@@ -1010,10 +1020,29 @@ async function triggerDashboardCrawl() {
         var sd = await sr.json();
         if (sd.status === 'done') {
           clearInterval(dashCrawlTimer);
-          showDashToast('✓ 采集完成！正在刷新…', 'done');
+          // Compare before/after stats
+          var afterKwParam = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
+          var afterR = await fetch('/api/stats' + afterKwParam);
+          var afterStats = await afterR.json();
+
+          var msg = '✓ 采集完成！';
+          if (dashBeforeStats && afterStats) {
+            var diffs = [];
+            var totalDiff = (afterStats.total || 0) - (dashBeforeStats.total || 0);
+            var bsrDiff = (afterStats.with_bsr || 0) - (dashBeforeStats.with_bsr || 0);
+            if (totalDiff !== 0) diffs.push('商品 ' + (totalDiff > 0 ? '+' : '') + totalDiff);
+            if (bsrDiff !== 0) diffs.push('BSR ' + (bsrDiff > 0 ? '+' : '') + bsrDiff);
+            if (diffs.length > 0) {
+              msg += ' 变化: ' + diffs.join('，');
+            } else {
+              msg += ' 数据无变化';
+            }
+          }
+          msg += ' · 正在刷新…';
+          showDashToast(msg, 'done');
           btn.disabled = false;
           btn.textContent = '🔄 采集';
-          setTimeout(() => { hideDashToast(); loadAll(); }, 1500);
+          setTimeout(() => { hideDashToast(); loadAll(); }, 2000);
         } else if (sd.status === 'error') {
           clearInterval(dashCrawlTimer);
           showDashToast('采集失败', 'error');
@@ -1323,6 +1352,24 @@ PRODUCT_TEMPLATE = r'''<!DOCTYPE html>
   .freshness-badge.stale { background: #fef3c7; color: #92400e; }
   .freshness-badge.old { background: #fee2e2; color: #991b1b; }
 
+  /* ── crawl result banner ── */
+  .crawl-result-banner { border-radius: var(--radius); padding: 14px 18px;
+    margin-bottom: 12px; font-size: .82rem; display: flex; align-items: flex-start;
+    gap: 12px; box-shadow: var(--shadow); }
+  .crawl-result-banner.changed { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+  .crawl-result-banner.nochange { background: #f8fafc; border: 1px solid #e5e7eb; color: #475569; }
+  .crawl-result-banner .banner-icon { font-size: 1.4rem; flex-shrink: 0; }
+  .crawl-result-banner .banner-body { flex: 1; }
+  .crawl-result-banner .banner-title { font-weight: 600; margin-bottom: 4px; }
+  .crawl-result-banner .banner-item { display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 4px; margin: 2px 4px 2px 0;
+    font-size: .78rem; white-space: nowrap; }
+  .crawl-result-banner .banner-item.up { background: #fee2e2; color: #991b1b; }
+  .crawl-result-banner .banner-item.down { background: #d1fae5; color: #065f46; }
+  .crawl-result-banner .banner-summary { font-size: .75rem; margin-top: 4px; }
+  .crawl-result-banner .banner-stats { display: flex; gap: 12px; margin-top: 6px;
+    font-size: .73rem; color: var(--muted); }
+
   /* ── header ── */
   .product-header { background: var(--card); border-radius: var(--radius);
     box-shadow: var(--shadow); padding: 16px 20px; margin-bottom: 10px;
@@ -1487,6 +1534,43 @@ PRODUCT_TEMPLATE = r'''<!DOCTYPE html>
     {% else %}
     ⚪ 采集时间未知
     {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- ── Post-crawl result banner ── -->
+  {% if crawl_result %}
+  <div class="crawl-result-banner {{ 'changed' if crawl_result.has_change else 'nochange' }}">
+    <div class="banner-icon">
+      {% if crawl_result.has_change %}📊{% else %}ℹ️{% endif %}
+    </div>
+    <div class="banner-body">
+      <div class="banner-title">
+        🔄 重新采集完成
+        {% if crawl_result.has_change %}
+        — 数据有变化
+        {% else %}
+        — 数据无变化
+        {% endif %}
+      </div>
+      {% if crawl_result.has_change %}
+      <div>
+        {% for ch in crawl_result.changes %}
+        <span class="banner-item {{ ch.dir }}">
+          {{ ch.label }}: {{ ch.text }}
+          <strong>{{ ch.delta }}</strong>
+        </span>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="banner-summary">
+        本次采集的价格、BSR 排名、评论数与上次完全一致，商品数据稳定。
+      </div>
+      {% endif %}
+      <div class="banner-stats">
+        <span>📈 历史记录: {{ crawl_result.record_count }} 条</span>
+        <span>🕐 采集时间: {{ scraped_at[:19] if scraped_at else '-' }}</span>
+      </div>
+    </div>
   </div>
   {% endif %}
 
@@ -1823,7 +1907,11 @@ function pollCrawlStatus(jobId, btn) {
       if (d.status === 'done') {
         clearInterval(crawlTimer);
         showToast('✓ 采集完成！页面即将刷新…', 'done');
-        setTimeout(() => { location.reload(); }, 1200);
+        setTimeout(() => {
+          var url = new URL(location.href);
+          url.searchParams.set('crawled', '1');
+          location.href = url.toString();
+        }, 1200);
       } else if (d.status === 'error') {
         clearInterval(crawlTimer);
         showToast('采集失败，请查看终端日志', 'error');
@@ -1875,6 +1963,7 @@ def product_detail(asin):
 
     db = get_db()
     kw = request.args.get('kw', '').strip()
+    crawled = request.args.get('crawled', '').strip()
 
     row = db.execute(
         """SELECT * FROM products WHERE asin = ?""", (asin,)
@@ -1972,6 +2061,56 @@ def product_detail(asin):
             else:
                 deltas['reviews'] = ('flat', '未变')
 
+    # ── Crawl result summary (shown after re-crawl) ─────────────────────
+    crawl_result = None
+    if crawled == '1' and len(hist) >= 2:
+        prev = hist[-2]
+        curr = hist[-1]
+        changes = []
+        has_change = False
+
+        # price
+        if prev['price'] is not None and curr['price'] is not None:
+            d = round(curr['price'] - prev['price'], 2)
+            if abs(d) > 0.01:
+                has_change = True
+                changes.append({
+                    'label': '价格',
+                    'text': f"${prev['price']:,.2f} → ${curr['price']:,.2f}",
+                    'delta': f"{'+' if d > 0 else ''}${d:,.2f}",
+                    'dir': 'up' if d > 0 else 'down',
+                })
+        # BSR
+        prev_bsr_rank = parse_bsr_rank(prev['bsr'])
+        curr_bsr_rank = parse_bsr_rank(curr['bsr'])
+        if prev_bsr_rank is not None and curr_bsr_rank is not None:
+            if prev_bsr_rank != curr_bsr_rank:
+                has_change = True
+                d = prev_bsr_rank - curr_bsr_rank
+                changes.append({
+                    'label': 'BSR',
+                    'text': f"#{prev_bsr_rank:,} → #{curr_bsr_rank:,}",
+                    'delta': f"{'↑' if d > 0 else '↓'}{abs(d)}位",
+                    'dir': 'down' if d > 0 else 'up',  # lower rank num = better
+                })
+        # reviews
+        if prev['review_count'] is not None and curr['review_count'] is not None:
+            d = curr['review_count'] - prev['review_count']
+            if d != 0:
+                has_change = True
+                changes.append({
+                    'label': '评论数',
+                    'text': f"{prev['review_count']:,} → {curr['review_count']:,}",
+                    'delta': f"{'+' if d > 0 else ''}{d}",
+                    'dir': 'up' if d > 0 else 'down',
+                })
+
+        crawl_result = {
+            'has_change': has_change,
+            'changes': changes,
+            'record_count': len(hist),
+        }
+
     # ── Prev / Next navigation ───────────────────────────────────────────
     prev_asin = next_asin = None
     if kw:
@@ -2011,6 +2150,7 @@ def product_detail(asin):
         price_delta=price_delta,
         scraped_at=scraped_at, hours_ago=hours_ago, freshness_text=freshness_text,
         deltas=deltas,
+        crawl_result=crawl_result,
         prev_asin=prev_asin, next_asin=next_asin,
         history=hist_rows, hist_labels=hist_labels, hist_prices=hist_prices,
         hist_rows_json=json.dumps([{
