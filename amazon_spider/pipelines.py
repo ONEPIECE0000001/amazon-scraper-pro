@@ -79,10 +79,27 @@ class DataCleaningPipeline:
             raise DropItem(f"Invalid ASIN: {asin}")
 
         # --- 字符串字段 strip ---
-        for field in ('title', 'brand', 'category', 'description'):
+        for field in ('title', 'brand', 'category', 'description',
+                      'bsr', 'coupon_text', 'fulfillment_type', 'sold_by'):
             val = item.get(field)
             if isinstance(val, str):
                 item[field] = val.strip()
+
+        # --- answered_questions → int ---
+        aq = item.get('answered_questions')
+        if aq is not None:
+            try:
+                item['answered_questions'] = int(aq)
+            except (ValueError, TypeError):
+                item['answered_questions'] = None
+
+        # --- variation_count → int ---
+        vc = item.get('variation_count')
+        if vc is not None:
+            try:
+                item['variation_count'] = int(vc)
+            except (ValueError, TypeError):
+                item['variation_count'] = None
 
         # --- scraped_at 默认值 ---
         if not item.get('scraped_at'):
@@ -157,6 +174,12 @@ class SQLitePipeline:
                 image_url   TEXT,
                 description TEXT,
                 date_first_available TEXT,
+                bsr                     TEXT,
+                coupon_text             TEXT,
+                answered_questions      INTEGER,
+                variation_count         INTEGER,
+                fulfillment_type        TEXT,
+                sold_by                 TEXT,
                 scraped_at  TEXT,
                 created_at  TEXT DEFAULT (datetime('now')),
                 UNIQUE(keyword, asin)
@@ -176,8 +199,10 @@ class SQLitePipeline:
                 INSERT INTO products
                     (keyword, asin, title, price, original_price, rating, review_count,
                      brand, category, seller_name, availability, is_prime,
-                     url, image_url, description, date_first_available, scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     url, image_url, description, date_first_available,
+                     bsr, coupon_text, answered_questions, variation_count,
+                     fulfillment_type, sold_by, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(keyword, asin) DO UPDATE SET
                     title       = excluded.title,
                     price       = excluded.price,
@@ -189,6 +214,12 @@ class SQLitePipeline:
                     availability = excluded.availability,
                     is_prime    = excluded.is_prime,
                     image_url   = excluded.image_url,
+                    bsr         = excluded.bsr,
+                    coupon_text = excluded.coupon_text,
+                    answered_questions = excluded.answered_questions,
+                    variation_count    = excluded.variation_count,
+                    fulfillment_type   = excluded.fulfillment_type,
+                    sold_by     = excluded.sold_by,
                     scraped_at  = excluded.scraped_at
             """, (
                 item.get('keyword', ''), item.get('asin'), item.get('title'), item.get('price'),
@@ -196,7 +227,10 @@ class SQLitePipeline:
                 item.get('brand'), item.get('category'), item.get('seller_name'),
                 item.get('availability'), item.get('is_prime'),
                 item.get('url'), item.get('image_url'), item.get('description'),
-                item.get('date_first_available'), item.get('scraped_at'),
+                item.get('date_first_available'),
+                item.get('bsr'), item.get('coupon_text'), item.get('answered_questions'),
+                item.get('variation_count'), item.get('fulfillment_type'), item.get('sold_by'),
+                item.get('scraped_at'),
             ))
             self.conn.commit()
         except sqlite3.Error as e:
@@ -260,6 +294,12 @@ class MySQLPipeline:
                     image_url TEXT,
                     description TEXT,
                     date_first_available VARCHAR(255),
+                    bsr TEXT,
+                    coupon_text TEXT,
+                    answered_questions INT,
+                    variation_count INT,
+                    fulfillment_type VARCHAR(50),
+                    sold_by VARCHAR(255),
                     scraped_at DATETIME,
                     KEY idx_asin (asin)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -280,14 +320,23 @@ class MySQLPipeline:
                 INSERT INTO products
                     (asin, title, price, original_price, rating, review_count,
                      brand, category, seller_name, availability, is_prime,
-                     url, image_url, description, date_first_available, scraped_at)
+                     url, image_url, description, date_first_available,
+                     bsr, coupon_text, answered_questions, variation_count,
+                     fulfillment_type, sold_by, scraped_at)
                 VALUES
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                     %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     price = VALUES(price),
                     rating = VALUES(rating),
                     review_count = VALUES(review_count),
                     availability = VALUES(availability),
+                    bsr = VALUES(bsr),
+                    coupon_text = VALUES(coupon_text),
+                    answered_questions = VALUES(answered_questions),
+                    variation_count = VALUES(variation_count),
+                    fulfillment_type = VALUES(fulfillment_type),
+                    sold_by = VALUES(sold_by),
                     scraped_at = VALUES(scraped_at)
             """, (
                 item.get('asin'), item.get('title'), item.get('price'),
@@ -295,7 +344,10 @@ class MySQLPipeline:
                 item.get('brand'), item.get('category'), item.get('seller_name'),
                 item.get('availability'), item.get('is_prime'),
                 item.get('url'), item.get('image_url'), item.get('description'),
-                item.get('date_first_available'), item.get('scraped_at'),
+                item.get('date_first_available'),
+                item.get('bsr'), item.get('coupon_text'), item.get('answered_questions'),
+                item.get('variation_count'), item.get('fulfillment_type'), item.get('sold_by'),
+                item.get('scraped_at'),
             ))
             self.conn.commit()
         except pymysql.Error as e:

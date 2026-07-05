@@ -18,4 +18,11 @@ class AmazonProductItem(scrapy.Item):
     image_url = scrapy.Field()
     description = scrapy.Field()
     date_first_available = scrapy.Field()
+    # 第一期新增字段
+    bsr = scrapy.Field()                    # Best Sellers Rank
+    coupon_text = scrapy.Field()            # 优惠券/折扣信息
+    answered_questions = scrapy.Field()     # Q&A 数量
+    variation_count = scrapy.Field()        # 变体数量
+    fulfillment_type = scrapy.Field()       # FBA / FBM
+    sold_by = scrapy.Field()                # 卖家信息
     scraped_at = scrapy.Field()

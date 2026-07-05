@@ -220,11 +220,31 @@ TEMPLATE = r'''<!DOCTYPE html>
         {% if r.brand %}
         <span class="tag brand">{{ r.brand }}</span>
         {% endif %}
+        {% if r.fulfillment_type %}
+        <span class="tag" style="background:#d1fae5;color:#065f46;">{{ r.fulfillment_type }}</span>
+        {% endif %}
+        {% if r.sold_by %}
+        <span class="tag">{{ r.sold_by[:30] }}</span>
+        {% endif %}
         {% if r.category %}
-        <span class="tag">{{ r.category[:50] }}</span>
+        <span class="tag">{{ r.category[:40] }}</span>
+        {% endif %}
+      </div>
+      <div class="tags" style="margin-top:2px;">
+        {% if r.bsr %}
+        <span class="tag" style="background:#fef2f2;color:#991b1b;" title="Best Sellers Rank">📊 BSR: {{ r.bsr[:60] }}</span>
+        {% endif %}
+        {% if r.coupon_text %}
+        <span class="tag" style="background:#fef7ed;color:#b45309;">🏷 {{ r.coupon_text[:40] }}</span>
+        {% endif %}
+        {% if r.answered_questions is not none %}
+        <span class="tag">❓ {{ r.answered_questions }} Q&A</span>
+        {% endif %}
+        {% if r.variation_count is not none %}
+        <span class="tag">📐 {{ r.variation_count }} 变体</span>
         {% endif %}
         {% if r.availability %}
-        <span class="tag">{{ r.availability[:40] }}</span>
+        <span class="tag">{{ r.availability[:30] }}</span>
         {% endif %}
       </div>
     </div>
@@ -345,7 +365,9 @@ def index():
     rows = db.execute(
         f"""SELECT keyword, asin, title, price, rating, review_count,
                    brand, category, is_prime, availability,
-                   date_first_available, url, scraped_at, image_url
+                   date_first_available, url, scraped_at, image_url,
+                   bsr, coupon_text, answered_questions, variation_count,
+                   fulfillment_type, sold_by
             FROM products {where_clause}
             ORDER BY scraped_at DESC
             LIMIT ? OFFSET ?""",
@@ -368,6 +390,12 @@ def index():
             'availability': row['availability'],
             'url': row['url'],
             'image': row['image_url'],
+            'bsr': row['bsr'],
+            'coupon_text': row['coupon_text'],
+            'answered_questions': row['answered_questions'],
+            'variation_count': row['variation_count'],
+            'fulfillment_type': row['fulfillment_type'],
+            'sold_by': row['sold_by'],
         }))
 
     # Page range for pagination

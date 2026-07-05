@@ -280,6 +280,12 @@ class AdvancedAmazonSpider(scrapy.Spider):
                     "description": None,
                     "original_price": None,
                     "date_first_available": None,
+                    "bsr": None,
+                    "coupon_text": None,
+                    "answered_questions": None,
+                    "variation_count": None,
+                    "fulfillment_type": None,
+                    "sold_by": None,
                     "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
@@ -387,6 +393,102 @@ class AdvancedAmazonSpider(scrapy.Spider):
         # Prime
         is_prime = "Yes" if response.css(".a-icon-prime").get() else "No"
 
+        # ── 第一期新增字段 ─────────────────────────────────────────
+
+        # BSR (Best Sellers Rank)
+        bsr = None
+        bsr_block = response.css(
+            "#productDetails_detailBullets_sections1, "
+            "#detailBulletsWrapper_feature_div, "
+            "#productDetails_db_sections"
+        )
+        if bsr_block:
+            bsr_text = bsr_block.css(
+                "th:contains('Best Sellers Rank') + td::text, "
+                "th:contains('Best Sellers Rank') + td span::text"
+            ).get()
+            if not bsr_text:
+                # Fallback: search whole block text for BSR pattern
+                full = " ".join(bsr_block.css("::text").getall())
+                m = re.search(
+                    r"Best Sellers Rank[:\s]*([^#\n]+?)(?=\s*(?:#|$))", full
+                )
+                if m:
+                    bsr_text = m.group(1).strip()
+            if bsr_text:
+                bsr = _clean_text(bsr_text)
+
+        # Coupon / discount text
+        coupon_text = None
+        for sel in (
+            ".promoPriceBlockMessage::text",
+            ".vpcoupon::text",
+            "#couponText::text",
+            ".a-badge-label-inner::text",
+            "[data-a-badge-color='sx-gold'] .a-badge-label-inner::text",
+        ):
+            t = response.css(sel).get()
+            if t and t.strip():
+                coupon_text = _clean_text(t)
+                break
+
+        # Answered questions count
+        answered_questions = None
+        qa_text = response.css("#ask-btf .a-size-base::text").get()
+        if not qa_text:
+            qa_text = response.css(
+                "#ask-btf .a-size-base .a-text-bold::text"
+            ).get()
+        if qa_text:
+            m = re.search(r"\d+", qa_text)
+            if m:
+                answered_questions = int(m.group())
+
+        # Variation count (color/size swatches)
+        variation_count = None
+        swatches = response.css("#twister .swatchAvailable, #variation_size_name li")
+        if swatches:
+            variation_count = len(swatches)
+
+        # Fulfillment type — FBA vs FBM
+        fulfillment_type = None
+        fulfiller = response.css("#fulfillerInfo_feature_div::text").get()
+        if not fulfiller:
+            fulfiller = response.css(
+                "#merchantInfoFeature_feature_div::text"
+            ).get()
+        if fulfiller:
+            fulfiller = fulfiller.strip()
+            if "amazon" in fulfiller.lower() or "fba" in fulfiller.lower():
+                fulfillment_type = "FBA"
+            elif (
+                "ships from" in fulfiller.lower()
+                and "amazon" not in fulfiller.lower()
+            ):
+                fulfillment_type = "FBM"
+            else:
+                fulfillment_type = _clean_text(fulfiller)
+
+        # Sold by
+        sold_by = None
+        seller = response.css("#sellerProfileTriggerId::text").get()
+        if not seller:
+            seller = response.css(
+                "#merchant-info a::text, "
+                "#merchant-info::text"
+            ).get()
+        if not seller:
+            # Try product details table
+            for entry in response.css("tr"):
+                label = entry.css("th.prodDetSectionEntry::text").get()
+                if label and "Sold by" in label:
+                    value = entry.css("td.prodDetAttrValue::text").get()
+                    if value:
+                        seller = value
+                        break
+        if seller:
+            sold_by = _clean_text(seller)
+
         # Merge search + detail data → item
         item = self._pending.pop(product_id, None)
         if item is None:
@@ -400,6 +502,12 @@ class AdvancedAmazonSpider(scrapy.Spider):
         item["date_first_available"] = date_info
         item["availability"] = shipping
         item["is_prime"] = is_prime
+        item["bsr"] = bsr
+        item["coupon_text"] = coupon_text
+        item["answered_questions"] = answered_questions
+        item["variation_count"] = variation_count
+        item["fulfillment_type"] = fulfillment_type
+        item["sold_by"] = sold_by
 
         yield item
 

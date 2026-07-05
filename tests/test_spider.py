@@ -421,6 +421,8 @@ class TestDetailPageParsing:
             "original_price": None,
             "image_url": None,
             "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
             "scraped_at": "2024-01-01 00:00:00",
         }
         response = self.make_response(
@@ -444,7 +446,10 @@ class TestDetailPageParsing:
             "brand": None, "category": None, "seller_name": None,
             "availability": None, "is_prime": None, "description": None,
             "original_price": None, "image_url": None,
-            "date_first_available": None, "scraped_at": "2024-01-01 00:00:00",
+            "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
+            "scraped_at": "2024-01-01 00:00:00",
         }
         response = self.make_response(
             DETAIL_PAGE_HTML,
@@ -466,7 +471,10 @@ class TestDetailPageParsing:
             "brand": None, "category": None, "seller_name": None,
             "availability": None, "is_prime": None, "description": None,
             "original_price": None, "image_url": None,
-            "date_first_available": None, "scraped_at": "2024-01-01 00:00:00",
+            "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
+            "scraped_at": "2024-01-01 00:00:00",
         }
         response = self.make_response(
             DETAIL_PAGE_HTML,
@@ -488,7 +496,10 @@ class TestDetailPageParsing:
             "brand": None, "category": None, "seller_name": None,
             "availability": None, "is_prime": None, "description": None,
             "original_price": None, "image_url": None,
-            "date_first_available": None, "scraped_at": "2024-01-01 00:00:00",
+            "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
+            "scraped_at": "2024-01-01 00:00:00",
         }
         response = self.make_response(
             DETAIL_PAGE_HTML,
@@ -510,7 +521,10 @@ class TestDetailPageParsing:
             "brand": None, "category": None, "seller_name": None,
             "availability": None, "is_prime": None, "description": None,
             "original_price": None, "image_url": None,
-            "date_first_available": None, "scraped_at": "2024-01-01 00:00:00",
+            "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
+            "scraped_at": "2024-01-01 00:00:00",
         }
         response = self.make_response(
             DETAIL_PAGE_HTML,
@@ -533,7 +547,10 @@ class TestDetailPageParsing:
             "brand": None, "category": None, "seller_name": None,
             "availability": None, "is_prime": None, "description": None,
             "original_price": None, "image_url": None,
-            "date_first_available": None, "scraped_at": "2024-01-01 00:00:00",
+            "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
+            "scraped_at": "2024-01-01 00:00:00",
         }
         response = self.make_response(
             DETAIL_PAGE_MINIMAL,
@@ -568,6 +585,8 @@ class TestDetailPageParsing:
             "original_price": "$59.99",
             "image_url": "https://example.com/img.jpg",
             "date_first_available": None,
+            "bsr": None, "coupon_text": None, "answered_questions": None,
+            "variation_count": None, "fulfillment_type": None, "sold_by": None,
             "scraped_at": "2024-06-01 12:00:00",
         }
         response = self.make_response(

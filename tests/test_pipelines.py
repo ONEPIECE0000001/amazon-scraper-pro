@@ -41,6 +41,12 @@ def _item(**kwargs) -> AmazonProductItem:
         "image_url": None,
         "description": "A great product",
         "date_first_available": None,
+        "bsr": None,
+        "coupon_text": None,
+        "answered_questions": None,
+        "variation_count": None,
+        "fulfillment_type": None,
+        "sold_by": None,
         "scraped_at": None,
     }
     defaults.update(kwargs)
@@ -135,6 +141,43 @@ class TestDataCleaningPipeline:
         result = self.pipeline.process_item(item, MagicMock())
         assert result["title"] == "Wireless Earbuds"
 
+    # -- 第一期新增字段 -------------------------------------------------
+
+    def test_answered_questions_converted_to_int(self):
+        item = _item(answered_questions="42")
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["answered_questions"] == 42
+
+    def test_answered_questions_none_stays_none(self):
+        item = _item(answered_questions=None)
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["answered_questions"] is None
+
+    def test_variation_count_converted_to_int(self):
+        item = _item(variation_count="15")
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["variation_count"] == 15
+
+    def test_variation_count_invalid_becomes_none(self):
+        item = _item(variation_count="abc")
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["variation_count"] is None
+
+    def test_bsr_stripped(self):
+        item = _item(bsr="  #1 in Electronics  ")
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["bsr"] == "#1 in Electronics"
+
+    def test_coupon_text_stripped(self):
+        item = _item(coupon_text="  Save 20%  ")
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["coupon_text"] == "Save 20%"
+
+    def test_sold_by_stripped(self):
+        item = _item(sold_by="  TestSeller  ")
+        result = self.pipeline.process_item(item, MagicMock())
+        assert result["sold_by"] == "TestSeller"
+
     # -- scraped_at default ---------------------------------------------
 
     def test_scraped_at_set_when_missing(self):
@@ -188,6 +231,8 @@ class TestAmazonProductItem:
             "asin", "title", "price", "original_price", "rating",
             "review_count", "brand", "category", "seller_name",
             "availability", "is_prime", "url", "image_url",
-            "description", "date_first_available", "scraped_at",
+            "description", "date_first_available",
+            "bsr", "coupon_text", "answered_questions", "variation_count",
+            "fulfillment_type", "sold_by", "scraped_at",
         }
         assert set(item.fields.keys()) == expected
