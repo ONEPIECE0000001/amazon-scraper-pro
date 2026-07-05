@@ -5,6 +5,12 @@ import os
 from urllib.parse import urlencode
 from flask import Flask, render_template_string, request, g, jsonify
 
+from core.metrics import (
+    compute_est_monthly_sales,
+    compute_review_velocity,
+    compute_competition_score,
+)
+
 DATABASE = os.environ.get('SQLITE_PATH', 'amazon_data.db')
 PER_PAGE = 30
 
@@ -667,12 +673,19 @@ DASHBOARD_TEMPLATE = r'''<!DOCTYPE html>
   <canvas id="priceChart" height="200"></canvas>
 </div>
 
+<!-- 价格分布 -->
+<div class="panel">
+  <h2>📊 价格分布</h2>
+  <div class="sub" id="price-dist-sub">按关键词查看价格区间分布</div>
+  <canvas id="priceDistChart" height="180"></canvas>
+</div>
+
 <div class="grid-2">
   <!-- BSR 排行 -->
   <div class="panel">
     <h2>🏆 BSR 排行</h2>
     <div class="sub" id="bsr-sub"></div>
-    <table><thead><tr><th>#</th><th>商品</th><th>BSR</th><th>价格</th><th>评分</th></tr></thead>
+    <table><thead><tr><th>#</th><th>商品</th><th>BSR</th><th>预估月销</th><th>价格</th><th>评分</th></tr></thead>
     <tbody id="bsr-tbody"></tbody></table>
   </div>
 
@@ -694,7 +707,7 @@ DASHBOARD_TEMPLATE = r'''<!DOCTYPE html>
 </div>
 
 <script>
-let priceChart = null, radarChart = null;
+let priceChart = null, radarChart = null, priceDistChart = null;
 let keywordList = [];
 let currentKw = '';
 
@@ -731,7 +744,7 @@ async function loadAsins() {
 
 async function loadAll() {
   currentKw = document.getElementById('kw-select').value;
-  await Promise.all([loadAsins(), loadKPIs(), loadBSR(), loadCompetitors(), loadOpportunities()]);
+  await Promise.all([loadAsins(), loadKPIs(), loadBSR(), loadCompetitors(), loadOpportunities(), loadPriceDistribution()]);
 }
 
 // ── KPIs ──
@@ -800,9 +813,10 @@ async function loadBSR() {
   const tbody = document.getElementById('bsr-tbody');
   tbody.innerHTML = rows.map((r, i) =>
     '<tr><td>' + (i+1) + '</td><td title="' + r.title + '">' +
-    r.title.slice(0, 35) + '</td><td>' + r.bsr + '</td><td>$' +
+    r.title.slice(0, 35) + '</td><td>' + r.bsr + '</td><td>' +
+    (r.est_monthly_sales ? r.est_monthly_sales.toLocaleString() : '-') + '</td><td>$' +
     (r.price||'-') + '</td><td>' + (r.rating ? '★'+r.rating : '-') + '</td></tr>'
-  ).join('') || '<tr><td colspan="5">暂无BSR数据</td></tr>';
+  ).join('') || '<tr><td colspan="6">暂无BSR数据</td></tr>';
 }
 
 // ── Competitor radar ──
@@ -865,12 +879,55 @@ async function loadOpportunities() {
     '<div style="font-size:.78rem;color:var(--muted);">' +
     '★ ' + (o.rating||'-') + ' · ' + (o.review_count||0) + '评论 · $' +
     (o.price||'-') + '</div>' +
+    (o.review_velocity != null ?
+     '<div style="font-size:.72rem;color:#7c3aed;">日增 ' +
+     o.review_velocity + ' 评论</div>' : '') +
     '<div class="tags">' +
     '<span class="tag gold">' + (o.reason || '机会品') + '</span>' +
     (o.keyword ? '<span class="tag blue">' + o.keyword + '</span>' : '') +
     (o.brand ? '<span class="tag green">' + o.brand + '</span>' : '') +
     '</div></div>'
   ).join('') || '<div style="color:var(--muted);">暂无机会发现</div>';
+}
+
+// ── Price distribution ──
+async function loadPriceDistribution() {
+  const kw = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
+  const r = await fetch('/api/price-distribution' + kw);
+  const data = await r.json();
+  const dist = data.distribution || [];
+  const total = dist.reduce((a, d) => a + d.count, 0);
+  document.getElementById('price-dist-sub').textContent =
+    (currentKw || '全部关键词') + ' · ' + total + ' 个有价格商品';
+
+  const ctx = document.getElementById('priceDistChart').getContext('2d');
+  if (priceDistChart) priceDistChart.destroy();
+
+  const colors = ['#3b82f6','#10b981','#f59e0b','#f97316','#ef4444','#8b5cf6'];
+
+  priceDistChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: dist.map(d => d.range),
+      datasets: [{
+        label: '商品数',
+        data: dist.map(d => d.count),
+        backgroundColor: colors,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => '商品数: ' + ctx.raw } }
+      },
+      scales: {
+        y: { beginAtZero: true, title: { display: true, text: '商品数' }, ticks: { stepSize: 1 } },
+        x: { title: { display: true, text: '价格区间' } }
+      }
+    }
+  });
 }
 
 // ── init ──
@@ -927,7 +984,10 @@ def api_stats():
     opps = db.execute(
         "SELECT COUNT(*) FROM products WHERE rating >= 4.3 AND review_count <= 50"
     ).fetchone()[0]
-    return jsonify({'total': total, 'with_bsr': with_bsr, 'opportunities': opps})
+    result = {'total': total, 'with_bsr': with_bsr, 'opportunities': opps}
+    if kw:
+        result['competition_score'] = compute_competition_score(db, kw)
+    return jsonify(result)
 
 
 @app.route('/api/price-history')
@@ -963,7 +1023,12 @@ def api_bsr_top():
         rows = db.execute(
             "SELECT asin, title, bsr, price, rating FROM products WHERE bsr IS NOT NULL ORDER BY bsr ASC LIMIT 30"
         ).fetchall()
-    return jsonify({'ranking': [dict(r) for r in rows]})
+    ranking = []
+    for r in rows:
+        d = dict(r)
+        d['est_monthly_sales'] = compute_est_monthly_sales(r['bsr'])
+        ranking.append(d)
+    return jsonify({'ranking': ranking})
 
 
 @app.route('/api/competitors')
@@ -1000,6 +1065,7 @@ def api_opportunities():
     # Pattern 2: 性价比标杆 — high rating + high reviews + low price
     rows = db.execute(
         """SELECT asin, title, keyword, brand, price, rating, review_count,
+                  date_first_available,
                   CASE
                     WHEN rating >= 4.5 AND review_count <= 30 THEN '新品黑马🐴'
                     WHEN rating >= 4.3 AND review_count >= 100 AND price < 50 THEN '性价比标杆💰'
@@ -1017,7 +1083,57 @@ def api_opportunities():
              END, rating DESC
            LIMIT 15"""
     ).fetchall()
-    return jsonify({'opportunities': [dict(r) for r in rows]})
+    opportunities = []
+    for r in rows:
+        d = dict(r)
+        d['review_velocity'] = compute_review_velocity(
+            r['review_count'], r['date_first_available']
+        )
+        opportunities.append(d)
+    return jsonify({'opportunities': opportunities})
+
+
+@app.route('/api/price-distribution')
+def api_price_distribution():
+    """Return product count grouped by price buckets."""
+    db = get_db()
+    kw = request.args.get('kw', '').strip()
+
+    buckets = [
+        (0, 10, '$0-10'),
+        (10, 25, '$10-25'),
+        (25, 50, '$25-50'),
+        (50, 100, '$50-100'),
+        (100, 200, '$100-200'),
+        (200, None, '$200+'),
+    ]
+
+    if kw:
+        base_where = "WHERE keyword = ? AND price IS NOT NULL"
+        base_params = (kw,)
+    else:
+        base_where = "WHERE price IS NOT NULL"
+        base_params = ()
+
+    distribution = []
+    for lo, hi, label in buckets:
+        if hi is None:
+            clause = "price >= ?"
+            p = (lo,)
+        else:
+            clause = "price >= ? AND price < ?"
+            p = (lo, hi)
+
+        sql = f"SELECT COUNT(*) FROM products {base_where} AND {clause}"
+        count = db.execute(sql, base_params + p).fetchone()[0]
+        distribution.append({
+            'range': label,
+            'count': count,
+            'min': lo,
+            'max': hi,
+        })
+
+    return jsonify({'keyword': kw or None, 'distribution': distribution})
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────

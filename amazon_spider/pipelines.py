@@ -229,10 +229,21 @@ class SQLitePipeline:
                 asin        TEXT    NOT NULL,
                 price       REAL,
                 bsr         TEXT,
+                review_count INTEGER,
                 scraped_at  TEXT    NOT NULL,
                 UNIQUE(keyword, asin, scraped_at)
             )
         """)
+        # Auto-migrate: add review_count to existing price_history tables
+        try:
+            ph_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(price_history)")}
+            if 'review_count' not in ph_cols:
+                self.conn.execute(
+                    "ALTER TABLE price_history ADD COLUMN review_count INTEGER"
+                )
+                logger.info("SQLite: added missing column 'review_count' to price_history")
+        except sqlite3.OperationalError:
+            pass
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ph_asin ON price_history(asin)"
         )
@@ -286,13 +297,14 @@ class SQLitePipeline:
             # ── dual-write: append to price_history ────────────────────
             self.conn.execute("""
                 INSERT OR IGNORE INTO price_history
-                    (keyword, asin, price, bsr, scraped_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (keyword, asin, price, bsr, review_count, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 item.get('keyword', ''),
                 item.get('asin'),
                 item.get('price'),
                 item.get('bsr'),
+                item.get('review_count'),
                 item.get('scraped_at') or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             ))
             self.conn.commit()

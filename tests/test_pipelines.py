@@ -233,3 +233,38 @@ class TestAmazonProductItem:
             "fulfillment_type", "sold_by", "scraped_at",
         }
         assert set(item.fields.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# SQLitePipeline — price_history review_count
+# ---------------------------------------------------------------------------
+
+class TestSQLitePipelinePriceHistory:
+    """Verify price_history table includes review_count."""
+
+    def test_price_history_ddl_includes_review_count(self):
+        """Reconstruct the CREATE TABLE check by reading pipeline source."""
+        import inspect
+        from amazon_spider.pipelines import SQLitePipeline
+
+        src = inspect.getsource(SQLitePipeline.open_spider)
+        # price_history CREATE TABLE should mention review_count
+        assert "review_count" in src
+        assert "review_count INTEGER" in src or "review_count  INTEGER" in src
+
+    def test_dual_write_includes_review_count(self):
+        """process_item INSERT into price_history should include review_count."""
+        import inspect
+        from amazon_spider.pipelines import SQLitePipeline
+
+        src = inspect.getsource(SQLitePipeline.process_item)
+        # Should have review_count in price_history INSERT column list
+        assert "price_history" in src
+        # The INSERT column list should contain 'review_count'
+        assert "review_count" in src
+
+    def test_item_has_review_count_field(self):
+        """Item schema should include review_count for dual-write."""
+        item = AmazonProductItem()
+        item['review_count'] = 1234
+        assert item['review_count'] == 1234
