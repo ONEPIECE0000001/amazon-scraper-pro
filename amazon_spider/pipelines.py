@@ -103,7 +103,7 @@ class DataCleaningPipeline:
 
         # --- scraped_at 默认值 ---
         if not item.get('scraped_at'):
-            item['scraped_at'] = datetime.now()
+            item['scraped_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         return item
 
@@ -230,8 +230,7 @@ class SQLitePipeline:
                 price       REAL,
                 bsr         TEXT,
                 review_count INTEGER,
-                scraped_at  TEXT    NOT NULL,
-                UNIQUE(keyword, asin, scraped_at)
+                scraped_at  TEXT    NOT NULL
             )
         """)
         # Auto-migrate: add review_count to existing price_history tables
@@ -296,7 +295,7 @@ class SQLitePipeline:
             ))
             # ── dual-write: append to price_history ────────────────────
             self.conn.execute("""
-                INSERT OR IGNORE INTO price_history
+                INSERT INTO price_history
                     (keyword, asin, price, bsr, review_count, scraped_at)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (

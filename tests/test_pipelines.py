@@ -180,7 +180,9 @@ class TestDataCleaningPipeline:
     def test_scraped_at_set_when_missing(self):
         item = _item(scraped_at=None)
         result = self.pipeline.process_item(item, MagicMock())
-        assert isinstance(result["scraped_at"], datetime)
+        # scraped_at is now a string with millisecond precision (e.g. "2026-07-05 16:55:30.123")
+        assert isinstance(result["scraped_at"], str)
+        assert len(result["scraped_at"]) >= 19  # "YYYY-MM-DD HH:MM:SS" minimum
 
 
 # ---------------------------------------------------------------------------

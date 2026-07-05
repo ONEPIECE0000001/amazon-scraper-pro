@@ -1,7 +1,14 @@
 """Amazon Spider Web UI — browse scraped product data from SQLite."""
 
-import sqlite3
 import os
+import re
+import sys
+import json
+import uuid
+import sqlite3
+import threading
+import subprocess
+from datetime import datetime
 from urllib.parse import urlencode
 from flask import Flask, render_template_string, request, g, jsonify
 
@@ -206,58 +213,77 @@ TEMPLATE = r'''<!DOCTYPE html>
   {% if cur_kw %}<span> › {{ cur_kw }}</span>{% endif %}
 </div>
 
-<!-- page title -->
-<div class="page-title-row">
-  <h2>商品数据</h2>
-  <span class="meta">共 {{ total }} 条记录</span>
-</div>
-
-<!-- stats -->
-<div class="statbar">
-  <div class="statcard">
-    <div class="icon blue">🛒</div>
-    <div><div class="val blue">{{ total }}</div><div class="lbl">总商品</div></div>
-  </div>
-  <div class="statcard">
-    <div class="icon green">💲</div>
-    <div><div class="val green">{{ with_price }}</div><div class="lbl">有价格</div></div>
-  </div>
-  <div class="statcard">
-    <div class="icon yellow">⭐</div>
-    <div><div class="val yellow">{{ with_rating }}</div><div class="lbl">有评分</div></div>
-  </div>
-  <div class="statcard">
-    <div class="icon purple">📊</div>
-    <div><div class="val purple">{{ avg_price }}</div><div class="lbl">均价 (USD)</div></div>
-  </div>
-  <div class="statcard">
-    <div class="icon red">🔑</div>
-    <div><div class="val red">{{ keywords|length }}</div><div class="lbl">关键词数</div></div>
-  </div>
+<!-- compact stats -->
+<div style="max-width:1400px;margin:0 auto;padding:8px 24px 0;font-size:.75rem;color:var(--muted);">
+  共 <strong style="color:var(--text);">{{ total }}</strong> 个商品
+  · <strong style="color:var(--text);">{{ kw_count }}</strong> 个关键词
+  · <strong style="color:var(--text);">{{ brand_count }}</strong> 个品牌
 </div>
 
 <div class="main">
 
   <!-- filter bar -->
-  <form class="filter-bar" method="get">
+  <form class="filter-bar" method="get" autocomplete="off">
     <div class="search-wrap">
-      <span class="search-icon">🔍</span>
-      <input name="q" value="{{ query }}" placeholder="搜索标题 / ASIN / 品牌 …">
+      <select name="search_type" style="position:absolute;left:0;top:0;bottom:0;width:80px;
+        border:none;border-right:1px solid var(--border);border-radius:6px 0 0 6px;
+        background:#f8fafc;font-size:.75rem;padding:0 4px;outline:none;z-index:1;
+        color:var(--muted);">
+        <option value="all" {% if search_type == 'all' %}selected{% endif %}>全部</option>
+        <option value="title" {% if search_type == 'title' %}selected{% endif %}>标题</option>
+        <option value="asin" {% if search_type == 'asin' %}selected{% endif %}>ASIN</option>
+        <option value="brand" {% if search_type == 'brand' %}selected{% endif %}>品牌</option>
+      </select>
+      <span class="search-icon" style="left:88px;">🔍</span>
+      <input name="q" value="{{ query }}" placeholder="输入搜索内容…" autocomplete="off"
+       style="padding-left:108px;">
     </div>
-    <input type="number" name="min_price" value="{{ min_price }}" placeholder="最低价">
-    <input type="number" name="max_price" value="{{ max_price }}" placeholder="最高价">
-    <input type="number" name="min_rating" value="{{ min_rating }}" placeholder="最低评分" step="0.5">
+    <select name="brand" onchange="this.form.submit()" style="padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--card);">
+      <option value="">全部品牌</option>
+      {% for b in brand_list %}
+      <option value="{{ b }}" {% if brand == b %}selected{% endif %}>{{ b[:30] }}</option>
+      {% endfor %}
+    </select>
+    <select name="fulfillment" onchange="this.form.submit()" style="padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--card);">
+      <option value="">全部配送</option>
+      <option value="FBA" {% if fulfillment == 'FBA' %}selected{% endif %}>FBA</option>
+      <option value="FBM" {% if fulfillment == 'FBM' %}selected{% endif %}>FBM</option>
+    </select>
+    <input type="number" name="min_price" value="{{ min_price }}" placeholder="最低价" style="width:80px;">
+    <input type="number" name="max_price" value="{{ max_price }}" placeholder="最高价" style="width:80px;">
+    <input type="number" name="min_rating" value="{{ min_rating }}" placeholder="评分≥" step="0.5" style="width:70px;">
+    <label style="font-size:.78rem;display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer;">
+      <input type="checkbox" name="prime" value="1" {% if prime_only == '1' %}checked{% endif %} onchange="this.form.submit()"> Prime
+    </label>
+    <select name="sort" onchange="this.form.submit()" style="padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--card);">
+      <option value="latest" {% if sort == 'latest' %}selected{% endif %}>最新 ↓</option>
+      <option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>价格 ↑</option>
+      <option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>价格 ↓</option>
+      <option value="rating" {% if sort == 'rating' %}selected{% endif %}>评分 ↓</option>
+      <option value="reviews" {% if sort == 'reviews' %}selected{% endif %}>评论 ↓</option>
+    </select>
+    <select name="per_page" onchange="this.form.submit()" style="padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:.82rem;background:var(--card);">
+      <option value="30" {% if per_page == 30 %}selected{% endif %}>30条</option>
+      <option value="60" {% if per_page == 60 %}selected{% endif %}>60条</option>
+      <option value="90" {% if per_page == 90 %}selected{% endif %}>90条</option>
+    </select>
     <button type="submit">筛选</button>
-    {% if query or min_price or max_price or min_rating or cur_kw %}
+    {% if query or min_price or max_price or min_rating or cur_kw or brand or fulfillment or prime_only or search_type != 'all' %}
     <a href="/"><button type="button" class="ghost">清除</button></a>
     {% endif %}
 
+    <input type="hidden" name="kw" value="{{ cur_kw }}" id="kw-hidden">
     {% if keywords %}
     <div class="kw-bar">
       <span class="kw-label">关键词:</span>
       {% for kw in keywords %}
-      <a href="?kw={{ kw }}" class="{% if cur_kw == kw %}active{% endif %}">{{ kw }}</a>
+      <a href="#" onclick="document.getElementById('kw-hidden').value='{{ kw }}';this.closest('form').submit();return false;"
+         class="{% if cur_kw == kw %}active{% endif %}">{{ kw }}</a>
       {% endfor %}
+      {% if cur_kw %}
+      <a href="#" onclick="document.getElementById('kw-hidden').value='';this.closest('form').submit();return false;"
+         style="background:#fee2e2;color:#991b1b;">✕ 清除</a>
+      {% endif %}
     </div>
     {% endif %}
   </form>
@@ -293,6 +319,7 @@ TEMPLATE = r'''<!DOCTYPE html>
         {% endif %}
       </div>
       <div class="tags">
+        <a href="/product/{{ r.asin }}" class="tag" style="background:#eff6ff;color:#1e40af;text-decoration:none;cursor:pointer;" title="查看单品分析">🆔 {{ r.asin }}</a>
         {% if r.keyword %}
         <span class="tag keyword">{{ r.keyword }}</span>
         {% endif %}
@@ -369,7 +396,20 @@ def get_db():
     if 'db' not in g:
         g.db = sqlite3.connect(DATABASE)
         g.db.row_factory = sqlite3.Row
+        _ensure_schema(g.db)
     return g.db
+
+
+def _ensure_schema(db):
+    """Auto-migrate: add missing columns to existing tables (mirrors SQLitePipeline)."""
+    try:
+        # price_history: add review_count if missing
+        ph_cols = {r[1] for r in db.execute("PRAGMA table_info(price_history)")}
+        if ph_cols and 'review_count' not in ph_cols:
+            db.execute("ALTER TABLE price_history ADD COLUMN review_count INTEGER")
+            db.commit()
+    except sqlite3.OperationalError:
+        pass
 
 
 @app.teardown_appcontext
@@ -385,12 +425,18 @@ def close_db(error):
 def index():
     db = get_db()
 
-    # Filters
+    # ── Filters ──────────────────────────────────────────────────────────
     q = request.args.get('q', '').strip()
+    search_type = request.args.get('search_type', 'all').strip()
     min_price = request.args.get('min_price', '').strip()
     max_price = request.args.get('max_price', '').strip()
     min_rating = request.args.get('min_rating', '').strip()
     cur_kw = request.args.get('kw', '').strip()
+    brand = request.args.get('brand', '').strip()
+    fulfillment = request.args.get('fulfillment', '').strip()
+    prime_only = request.args.get('prime', '').strip()
+    sort = request.args.get('sort', 'latest').strip()
+    per_page = int(request.args.get('per_page', PER_PAGE))
     page = int(request.args.get('p', 1))
 
     where = []
@@ -401,9 +447,23 @@ def index():
         params.append(cur_kw)
 
     if q:
-        where.append("(title LIKE ? OR asin LIKE ? OR brand LIKE ? OR category LIKE ?)")
         like = f"%{q}%"
-        params.extend([like, like, like, like])
+        if search_type == 'title':
+            where.append("title LIKE ?")
+            params.append(like)
+        elif search_type == 'asin':
+            where.append("asin LIKE ?")
+            params.append(like)
+        elif search_type == 'brand':
+            where.append("brand LIKE ?")
+            params.append(like)
+        else:
+            where.append("(title LIKE ? OR asin LIKE ? OR brand LIKE ? OR category LIKE ?)")
+            params.extend([like, like, like, like])
+
+    if brand:
+        where.append("brand = ?")
+        params.append(brand)
 
     if min_price:
         where.append("price >= ?")
@@ -415,30 +475,53 @@ def index():
         where.append("rating >= ?")
         params.append(float(min_rating))
 
+    if fulfillment == 'FBA':
+        where.append("fulfillment_type LIKE 'FBA%'")
+    elif fulfillment == 'FBM':
+        where.append("fulfillment_type LIKE 'FBM%'")
+
+    if prime_only == '1':
+        where.append("is_prime = 'Yes'")
+
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
 
-    # Count
+    # ── Sort ─────────────────────────────────────────────────────────────
+    sort_map = {
+        'latest': 'scraped_at DESC',
+        'price_asc': 'price ASC',
+        'price_desc': 'price DESC',
+        'rating': 'rating DESC',
+        'reviews': 'review_count DESC',
+    }
+    order_by = sort_map.get(sort, 'scraped_at DESC')
+
+    # ── Count ────────────────────────────────────────────────────────────
     count = db.execute(
         f"SELECT COUNT(*) FROM products {where_clause}", params
     ).fetchone()[0]
 
-    # Global stats
-    stats = db.execute("""
-        SELECT COUNT(*) as total,
-               SUM(CASE WHEN price IS NOT NULL THEN 1 ELSE 0 END) as with_price,
-               SUM(CASE WHEN rating IS NOT NULL THEN 1 ELSE 0 END) as with_rating,
-               ROUND(AVG(price), 2) as avg_price
-        FROM products
-    """).fetchone()
+    # ── Global counts ────────────────────────────────────────────────────
+    kw_count = db.execute(
+        "SELECT COUNT(DISTINCT keyword) FROM products WHERE keyword != ''"
+    ).fetchone()[0]
+    brand_count = db.execute(
+        "SELECT COUNT(DISTINCT brand) FROM products WHERE brand IS NOT NULL AND brand != ''"
+    ).fetchone()[0]
 
-    # Keyword list
+    # ── Brand list for dropdown ──────────────────────────────────────────
+    brands = db.execute(
+        "SELECT DISTINCT brand FROM products WHERE brand IS NOT NULL AND brand != '' ORDER BY brand"
+    ).fetchall()
+    brand_list = [r['brand'] for r in brands]
+
+    # ── Keyword list ─────────────────────────────────────────────────────
     kws = db.execute(
         "SELECT DISTINCT keyword FROM products WHERE keyword != '' ORDER BY keyword"
     ).fetchall()
     keywords = [row['keyword'] for row in kws]
 
-    total_pages = max(1, (count + PER_PAGE - 1) // PER_PAGE)
-    offset = (page - 1) * PER_PAGE
+    total_pages = max(1, (count + per_page - 1) // per_page)
+    offset = (page - 1) * per_page
 
     rows = db.execute(
         f"""SELECT keyword, asin, title, price, rating, review_count,
@@ -447,12 +530,11 @@ def index():
                    bsr, coupon_text, answered_questions, variation_count,
                    fulfillment_type, sold_by
             FROM products {where_clause}
-            ORDER BY scraped_at DESC
+            ORDER BY {order_by}
             LIMIT ? OFFSET ?""",
-        params + [PER_PAGE, offset]
+        params + [per_page, offset]
     ).fetchall()
 
-    # Convert rows to dicts for easy template access
     product_rows = []
     for row in rows:
         product_rows.append(type('R', (), {
@@ -476,19 +558,21 @@ def index():
             'sold_by': row['sold_by'],
         }))
 
-    # Page range for pagination
     page_range = _build_page_range(page, total_pages)
 
     return render_template_string(
         TEMPLATE,
         rows=product_rows,
-        total=stats['total'],
-        with_price=stats['with_price'],
-        with_rating=stats['with_rating'],
-        avg_price=f"${stats['avg_price']:,.0f}" if stats['avg_price'] else '-',
+        total=count,
+        kw_count=kw_count,
+        brand_count=brand_count,
+        brand_list=brand_list,
         keywords=keywords,
         cur_kw=cur_kw,
-        query=q, min_price=min_price, max_price=max_price, min_rating=min_rating,
+        query=q, search_type=search_type,
+        brand=brand, fulfillment=fulfillment, prime_only=prime_only,
+        min_price=min_price, max_price=max_price, min_rating=min_rating,
+        sort=sort, per_page=per_page,
         page=page, total_pages=total_pages,
         page_range=page_range,
         page_qs=_page_qs,
@@ -500,7 +584,8 @@ def index():
 
 def _page_qs(p):
     args = {}
-    for key in ('q', 'min_price', 'max_price', 'min_rating', 'kw'):
+    for key in ('q', 'search_type', 'brand', 'fulfillment', 'prime', 'min_price', 'max_price',
+                'min_rating', 'kw', 'sort', 'per_page'):
         val = request.args.get(key, '')
         if val:
             args[key] = val
@@ -621,6 +706,37 @@ DASHBOARD_TEMPLATE = r'''<!DOCTYPE html>
     var(--border); border-radius: 6px; font-size: .82rem; }
   .sel-row button { background: var(--accent); color: #fff; border: none; cursor: pointer; }
 
+  /* ── autocomplete ── */
+  .autocomplete-wrap { position: relative; flex: 1; min-width: 160px; }
+  .autocomplete-wrap input { width: 100%; padding: 7px 12px; border: 1px solid var(--border);
+    border-radius: 6px; font-size: .82rem; outline: none; background: var(--card); }
+  .autocomplete-wrap input:focus { border-color: var(--accent); }
+  .autocomplete-dropdown { position: absolute; top: 100%; left: 0; right: 0;
+    max-height: 220px; overflow-y: auto; background: var(--card); border: 1px solid var(--border);
+    border-radius: 0 0 6px 6px; z-index: 200; display: none; box-shadow: 0 4px 12px rgba(0,0,0,.1);
+    margin-top: 2px; }
+  .autocomplete-dropdown.show { display: block; }
+  .autocomplete-item { padding: 8px 14px; cursor: pointer; font-size: .82rem;
+    border-bottom: 1px solid #f1f5f9; transition: background .1s; }
+  .autocomplete-item:last-child { border-bottom: none; }
+  .autocomplete-item:hover, .autocomplete-item.active { background: #eff6ff; }
+  .autocomplete-item .title { font-weight: 500; }
+  .autocomplete-item .sub { font-size: .7rem; color: var(--muted); }
+  .autocomplete-empty { padding: 10px 14px; font-size: .78rem; color: var(--muted);
+    text-align: center; }
+
+  /* ── crawl toast ── */
+  .crawl-toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 999; padding: 10px 24px; border-radius: 8px; font-size: .82rem;
+    font-weight: 500; box-shadow: 0 4px 16px rgba(0,0,0,.15);
+    display: none; align-items: center; gap: 10px; white-space: nowrap; }
+  .crawl-toast.running { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+  .crawl-toast.done { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+  .crawl-toast.error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+  .crawl-toast .spinner { width: 16px; height: 16px; border: 2px solid #bfdbfe;
+    border-top-color: #2563eb; border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   canvas { max-height: 300px; }
 </style>
 </head>
@@ -656,14 +772,23 @@ DASHBOARD_TEMPLATE = r'''<!DOCTYPE html>
 
 <div class="sel-row">
   <label>关键词:</label>
-  <select id="kw-select" onchange="loadAll()">
-    <option value="">全部</option>
-  </select>
+  <div class="autocomplete-wrap" id="kw-ac-wrap">
+    <input type="text" id="kw-input" placeholder="输入关键词搜索…" autocomplete="off">
+    <div class="autocomplete-dropdown" id="kw-dropdown"></div>
+  </div>
   <label>商品:</label>
-  <select id="asin-select" onchange="loadPriceHistory()">
-    <option value="">选择商品看价格走势…</option>
-  </select>
+  <div class="autocomplete-wrap" id="asin-ac-wrap" style="flex:2;">
+    <input type="text" id="asin-input" placeholder="输入品牌/标题/ASIN 搜索商品…" autocomplete="off">
+    <div class="autocomplete-dropdown" id="asin-dropdown"></div>
+  </div>
   <button onclick="loadAll()">刷新</button>
+  <button onclick="triggerDashboardCrawl()" id="dash-crawl-btn" style="background:var(--green);">🔄 采集</button>
+</div>
+
+<!-- crawl toast -->
+<div class="crawl-toast" id="dash-toast">
+  <span class="spinner" id="dash-toast-spinner"></span>
+  <span id="dash-crawl-msg"></span>
 </div>
 
 <!-- 价格走势 -->
@@ -709,42 +834,222 @@ DASHBOARD_TEMPLATE = r'''<!DOCTYPE html>
 <script>
 let priceChart = null, radarChart = null, priceDistChart = null;
 let keywordList = [];
+let productList = [];
 let currentKw = '';
+let currentAsin = '';
 
-// ── load keyword dropdown ──
+// ── Autocomplete builder ─────────────────────────────────────────────────
+function buildAutocomplete(inputId, dropdownId, getItems, onSelect, placeholder) {
+  const input = document.getElementById(inputId);
+  const dropdown = document.getElementById(dropdownId);
+  let activeIdx = -1;
+
+  input.placeholder = placeholder || '输入搜索…';
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    activeIdx = -1;
+    const items = getItems(q);
+    renderDropdown(dropdown, items, input.value.trim(), onSelect);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    const items = dropdown.querySelectorAll('.autocomplete-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIdx = Math.min(activeIdx + 1, items.length - 1);
+      updateActive(items, activeIdx);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIdx = Math.max(activeIdx - 1, -1);
+      updateActive(items, activeIdx);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIdx >= 0 && items[activeIdx]) {
+        items[activeIdx].click();
+      }
+    } else if (e.key === 'Escape') {
+      dropdown.classList.remove('show');
+    }
+  });
+
+  input.addEventListener('focus', () => {
+    const q = input.value.trim();
+    const items = getItems(q);
+    if (items.length > 0) renderDropdown(dropdown, items, q, onSelect);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!input.parentElement.contains(e.target)) {
+      dropdown.classList.remove('show');
+    }
+  });
+
+  return input;
+}
+
+function renderDropdown(dropdown, items, query, onSelect) {
+  if (items.length === 0) {
+    dropdown.innerHTML = '<div class="autocomplete-empty">无匹配结果</div>';
+    dropdown.classList.add('show');
+    return;
+  }
+  dropdown.innerHTML = items.map((item, i) =>
+    '<div class="autocomplete-item" data-idx="' + i + '" data-value="' + item.value + '">' +
+    (item.html || item.label) + '</div>'
+  ).join('');
+  dropdown.classList.add('show');
+
+  dropdown.querySelectorAll('.autocomplete-item').forEach(el => {
+    el.addEventListener('click', () => {
+      dropdown.classList.remove('show');
+      onSelect(el.dataset.value, el.textContent);
+    });
+  });
+}
+
+function updateActive(items, idx) {
+  items.forEach((el, i) => el.classList.toggle('active', i === idx));
+  if (idx >= 0 && items[idx]) {
+    items[idx].scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// ── Keyword autocomplete ────────────────────────────────────────────────
+function keywordItems(query) {
+  const q = query.toLowerCase();
+  const filtered = keywordList.filter(kw => kw.toLowerCase().includes(q));
+  if (!query && filtered.length === 0) return keywordList.map(k => ({value: k, label: k}));
+  return filtered.map(k => ({value: k, label: k}));
+}
+
+function onKeywordSelect(value) {
+  currentKw = value;
+  document.getElementById('kw-input').value = value;
+  loadAll();
+}
+
+// ── Product autocomplete ────────────────────────────────────────────────
+function productItems(query) {
+  const q = query.toLowerCase();
+  let list = productList;
+  if (currentKw) {
+    list = productList.filter(p => p.keyword === currentKw);
+  }
+  if (!query) return list.slice(0, 30).map(p => formatProductItem(p));
+  const filtered = list.filter(p =>
+    (p.title || '').toLowerCase().includes(q) ||
+    (p.brand || '').toLowerCase().includes(q) ||
+    (p.asin || '').toLowerCase().includes(q)
+  );
+  return filtered.slice(0, 30).map(p => formatProductItem(p));
+}
+
+function formatProductItem(p) {
+  return {
+    value: p.asin,
+    label: (p.brand ? '[' + p.brand + '] ' : '') + p.title,
+    html: '<div class="title">' + ((p.brand ? '[' + p.brand + '] ' : '') + p.title.slice(0, 70)) + '</div>' +
+          '<div class="sub">' + p.asin + (p.price ? ' · $' + p.price : '') + '</div>'
+  };
+}
+
+function onProductSelect(value) {
+  currentAsin = value;
+  document.getElementById('asin-input').value = value;
+  loadPriceHistory();
+}
+
+// ── Dashboard crawl ──────────────────────────────────────────────────
+let dashCrawlTimer = null;
+
+function showDashToast(msg, type) {
+  var t = document.getElementById('dash-toast');
+  t.className = 'crawl-toast ' + type;
+  document.getElementById('dash-crawl-msg').textContent = msg;
+  document.getElementById('dash-toast-spinner').style.display = (type === 'running') ? '' : 'none';
+  t.style.display = 'flex';
+}
+
+function hideDashToast() {
+  document.getElementById('dash-toast').style.display = 'none';
+  if (dashCrawlTimer) { clearInterval(dashCrawlTimer); dashCrawlTimer = null; }
+}
+
+async function triggerDashboardCrawl() {
+  var btn = document.getElementById('dash-crawl-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ …';
+  showDashToast('采集任务启动中…', 'running');
+
+  var body = {};
+  if (currentKw) body.keyword = currentKw;
+
+  try {
+    var r = await fetch('/api/crawl', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    var d = await r.json();
+
+    if (d.error) {
+      showDashToast(d.error, 'error');
+      btn.disabled = false;
+      btn.textContent = '🔄 采集';
+      setTimeout(hideDashToast, 5000);
+      return;
+    }
+
+    showDashToast('正在采集' + (currentKw || '全部') + '数据…', 'running');
+    btn.textContent = '⏳ …';
+
+    dashCrawlTimer = setInterval(async () => {
+      try {
+        var sr = await fetch('/api/crawl-status/' + d.job_id);
+        var sd = await sr.json();
+        if (sd.status === 'done') {
+          clearInterval(dashCrawlTimer);
+          showDashToast('✓ 采集完成！正在刷新…', 'done');
+          btn.disabled = false;
+          btn.textContent = '🔄 采集';
+          setTimeout(() => { hideDashToast(); loadAll(); }, 1500);
+        } else if (sd.status === 'error') {
+          clearInterval(dashCrawlTimer);
+          showDashToast('采集失败', 'error');
+          btn.disabled = false;
+          btn.textContent = '🔄 采集';
+          setTimeout(hideDashToast, 5000);
+        }
+      } catch(e) {}
+    }, 3000);
+  } catch(e) {
+    showDashToast('网络错误', 'error');
+    btn.disabled = false;
+    btn.textContent = '🔄 采集';
+    setTimeout(hideDashToast, 4000);
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
 async function init() {
   const r = await fetch('/api/keywords');
   const data = await r.json();
   keywordList = data.keywords || [];
-  const sel = document.getElementById('kw-select');
-  keywordList.forEach(kw => {
-    const o = document.createElement('option');
-    o.value = kw; o.textContent = kw;
-    sel.appendChild(o);
-  });
-  // Also populate asin dropdown
-  await loadAsins();
+
+  buildAutocomplete('kw-input', 'kw-dropdown', keywordItems, onKeywordSelect, '输入关键词搜索…');
+  buildAutocomplete('asin-input', 'asin-dropdown', productItems, onProductSelect, '输入品牌/标题/ASIN 搜索商品…');
+
+  // Load all products for autocomplete
+  const pr = await fetch('/api/products');
+  const pd = await pr.json();
+  productList = pd.products || [];
+
   loadAll();
 }
 
-async function loadAsins() {
-  const kw = document.getElementById('kw-select').value;
-  const url = kw ? '/api/products?kw=' + encodeURIComponent(kw) : '/api/products';
-  const r = await fetch(url);
-  const data = await r.json();
-  const sel = document.getElementById('asin-select');
-  sel.innerHTML = '<option value="">选择商品看价格走势…</option>';
-  (data.products || []).forEach(p => {
-    const o = document.createElement('option');
-    o.value = p.asin;
-    o.textContent = (p.brand ? '['+p.brand+'] ' : '') + p.title.slice(0, 60);
-    sel.appendChild(o);
-  });
-}
-
 async function loadAll() {
-  currentKw = document.getElementById('kw-select').value;
-  await Promise.all([loadAsins(), loadKPIs(), loadBSR(), loadCompetitors(), loadOpportunities(), loadPriceDistribution()]);
+  await Promise.all([loadKPIs(), loadBSR(), loadCompetitors(), loadOpportunities(), loadPriceDistribution()]);
 }
 
 // ── KPIs ──
@@ -803,20 +1108,54 @@ async function loadPriceHistory() {
 }
 
 // ── BSR ranking ──
+let bsrAllRows = [];
+let bsrExpanded = false;
+const BSR_SHOW_INITIAL = 10;
+
+function renderBSRRow(r, i) {
+  return '<tr><td>' + (i+1) + '</td><td title="' + r.title + '">' +
+    '<a href="/product/' + r.asin + '" style="color:var(--text);text-decoration:none;" ' +
+    'onmouseover="this.style.color=\'var(--accent)\'" onmouseout="this.style.color=\'var(--text)\'">' +
+    r.title.slice(0, 35) + '</a></td><td>' + r.bsr + '</td><td>' +
+    (r.est_monthly_sales ? r.est_monthly_sales.toLocaleString() : '-') + '</td><td>$' +
+    (r.price||'-') + '</td><td>' + (r.rating ? '★'+r.rating : '-') + '</td></tr>';
+}
+
 async function loadBSR() {
   const kw = currentKw ? '?kw=' + encodeURIComponent(currentKw) : '';
   const r = await fetch('/api/bsr-top' + kw);
   const data = await r.json();
-  const rows = data.ranking || [];
+  bsrAllRows = data.ranking || [];
+  bsrExpanded = false;
   document.getElementById('bsr-sub').textContent =
-    (currentKw || '全部关键词') + ' · 共 ' + rows.length + ' 个有BSR商品';
+    (currentKw || '全部关键词') + ' · 共 ' + bsrAllRows.length + ' 个有BSR商品';
+  renderBSRTable();
+}
+
+function renderBSRTable() {
   const tbody = document.getElementById('bsr-tbody');
-  tbody.innerHTML = rows.map((r, i) =>
-    '<tr><td>' + (i+1) + '</td><td title="' + r.title + '">' +
-    r.title.slice(0, 35) + '</td><td>' + r.bsr + '</td><td>' +
-    (r.est_monthly_sales ? r.est_monthly_sales.toLocaleString() : '-') + '</td><td>$' +
-    (r.price||'-') + '</td><td>' + (r.rating ? '★'+r.rating : '-') + '</td></tr>'
-  ).join('') || '<tr><td colspan="6">暂无BSR数据</td></tr>';
+  if (bsrAllRows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6">暂无BSR数据</td></tr>';
+    return;
+  }
+  const collapsed = bsrAllRows.length > BSR_SHOW_INITIAL && !bsrExpanded;
+  const visible = collapsed ? bsrAllRows.slice(0, BSR_SHOW_INITIAL) : bsrAllRows;
+  let html = visible.map((r, i) => renderBSRRow(r, i)).join('');
+  if (bsrAllRows.length > BSR_SHOW_INITIAL) {
+    html += '<tr><td colspan="6" style="text-align:center;padding:8px;">' +
+      '<button onclick="toggleBSR()" id="bsr-toggle-btn" ' +
+      'style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;' +
+      'background:var(--card);color:var(--accent);cursor:pointer;font-size:.8rem;' +
+      'transition:all .15s;">' +
+      (bsrExpanded ? '收起 ▲' : '展开全部 (' + bsrAllRows.length + ' 条) ▼') +
+      '</button></td></tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+function toggleBSR() {
+  bsrExpanded = !bsrExpanded;
+  renderBSRTable();
 }
 
 // ── Competitor radar ──
@@ -875,7 +1214,7 @@ async function loadOpportunities() {
   const grid = document.getElementById('opps-grid');
   grid.innerHTML = opps.map(o =>
     '<div class="opp-card">' +
-    '<div class="t" title="' + o.title + '">' + o.title.slice(0, 50) + '</div>' +
+    '<a href="/product/' + o.asin + '" style="text-decoration:none;color:inherit;"><div class="t" title="' + o.title + '">' + o.title.slice(0, 50) + '</div></a>' +
     '<div style="font-size:.78rem;color:var(--muted);">' +
     '★ ' + (o.rating||'-') + ' · ' + (o.review_count||0) + '评论 · $' +
     (o.price||'-') + '</div>' +
@@ -937,6 +1276,750 @@ init();
 </html>'''
 
 
+# ── Product detail page ──────────────────────────────────────────────────────
+
+PRODUCT_TEMPLATE = r'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title or asin }} — Amazon Spider</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f0f2f5; --card: #fff; --text: #1a1a2e; --muted: #6b7280;
+    --accent: #2563eb; --accent-hover: #1d4ed8;
+    --green: #059669; --yellow: #d97706; --red: #dc2626;
+    --border: #e5e7eb; --shadow: 0 1px 3px rgba(0,0,0,.06);
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  .navbar { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #fff; padding: 0 24px; position: sticky; top: 0; z-index: 100; }
+  .navbar-inner { max-width: 1200px; margin: 0 auto; display: flex;
+                  align-items: center; height: 52px; gap: 20px; }
+  .navbar .logo { font-size: 1.05rem; font-weight: 700; white-space: nowrap;
+                  display: flex; align-items: center; gap: 8px; }
+  .navbar nav { display: flex; gap: 4px; flex: 1; }
+  .navbar nav a { color: #94a3b8; text-decoration: none; padding: 6px 14px;
+                  border-radius: 6px; font-size: .82rem; font-weight: 500;
+                  transition: background .15s, color .15s; }
+  .navbar nav a:hover { background: rgba(255,255,255,.08); color: #e2e8f0; }
+
+  .breadcrumb { max-width: 1200px; margin: 0 auto; padding: 10px 24px 0;
+                font-size: .78rem; color: var(--muted); }
+  .breadcrumb a { color: var(--accent); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+
+  .main { max-width: 1200px; margin: 0 auto; padding: 12px 24px 40px; }
+
+  /* ── freshness badge ── */
+  .freshness-badge { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+    border-radius: 6px; font-size: .78rem; margin-bottom: 10px; }
+  .freshness-badge.fresh { background: #d1fae5; color: #065f46; }
+  .freshness-badge.stale { background: #fef3c7; color: #92400e; }
+  .freshness-badge.old { background: #fee2e2; color: #991b1b; }
+
+  /* ── header ── */
+  .product-header { background: var(--card); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px 20px; margin-bottom: 10px;
+    display: flex; gap: 18px; }
+  .product-header .img-box { flex-shrink: 0; width: 160px; height: 160px;
+    display: flex; align-items: center; justify-content: center;
+    background: #f8f9fb; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border); }
+  .product-header .img-box img { max-width: 100%; max-height: 100%;
+    object-fit: contain; }
+  .product-header .img-box .no-img { font-size: 3rem; color: #d1d5db; }
+  .product-header .header-info { flex: 1; min-width: 0; }
+  .product-header h1 { font-size: 1rem; line-height: 1.45; margin-bottom: 8px;
+    display: flex; align-items: flex-start; gap: 8px; }
+  .product-header h1 .title-text { flex: 1; }
+  .copy-btn { flex-shrink: 0; padding: 4px 10px; border: 1px solid var(--border);
+    border-radius: 4px; background: var(--card); color: var(--muted);
+    cursor: pointer; font-size: .72rem; white-space: nowrap; transition: all .15s; }
+  .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .copy-btn.copied { border-color: var(--green); color: var(--green); background: #d1fae5; }
+  .crawl-btn { flex-shrink: 0; padding: 4px 12px; border: 1px solid var(--green);
+    border-radius: 4px; background: #d1fae5; color: #065f46;
+    cursor: pointer; font-size: .72rem; white-space: nowrap; transition: all .15s;
+    font-weight: 500; }
+  .crawl-btn:hover { background: #a7f3d0; }
+  .crawl-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+  /* ── toast ── */
+  .crawl-toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 999; padding: 10px 24px; border-radius: 8px; font-size: .82rem;
+    font-weight: 500; box-shadow: 0 4px 16px rgba(0,0,0,.15);
+    display: none; align-items: center; gap: 10px; white-space: nowrap; }
+  .crawl-toast.running { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+  .crawl-toast.done { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+  .crawl-toast.error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+  .crawl-toast .spinner { width: 16px; height: 16px; border: 2px solid #bfdbfe;
+    border-top-color: #2563eb; border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .amazon-link { font-size: .78rem; color: var(--accent); text-decoration: none;
+    display: inline-flex; align-items: center; gap: 4px; }
+  .amazon-link:hover { text-decoration: underline; }
+
+  /* ── tags ── */
+  .tag { font-size: .7rem; padding: 2px 8px; border-radius: 4px;
+         background: #f1f5f9; color: #475569; white-space: nowrap;
+         display: inline-block; margin: 2px; text-decoration: none;
+         transition: background .15s; }
+  .tag.clickable { cursor: pointer; }
+  .tag.clickable:hover { background: #dbeafe; }
+  .tag.bsr { background: #fef2f2; color: #991b1b; }
+  .tag.prime { background: #d1fae5; color: #065f46; }
+  .tag.fba  { background: #dbeafe; color: #1e40af; }
+
+  /* ── section divider ── */
+  .section-label { font-size: .68rem; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .8px; margin-bottom: 6px; padding-left: 2px; }
+
+  /* ── info grid ── */
+  .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+               gap: 8px; margin-bottom: 12px; }
+  .info-card { background: var(--card); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 12px; position: relative; }
+  .info-card .label { font-size: .68rem; color: var(--muted); margin-bottom: 3px;
+                      display: flex; align-items: center; gap: 4px; }
+  .info-card .value { font-size: .95rem; font-weight: 600; color: var(--text); }
+  .info-card .value.price { color: var(--red); }
+  .info-card .value.rating { color: #f59e0b; }
+  .info-card .value.green { color: var(--green); }
+  .info-card .value.purple { color: #7c3aed; }
+  .info-card .value.blue { color: var(--accent); }
+  .info-card .delta { font-size: .7rem; margin-top: 2px; }
+  .info-card .delta.up { color: var(--red); }
+  .info-card .delta.down { color: var(--green); }
+  .info-card .delta.flat { color: var(--muted); }
+  .info-card .source-tag { font-size: .6rem; padding: 1px 5px; border-radius: 3px;
+    position: absolute; top: 6px; right: 8px; }
+  .info-card .source-tag.scraped { background: #dbeafe; color: #1e40af; }
+  .info-card .source-tag.derived { background: #fef3c7; color: #92400e; }
+
+  /* ── panels ── */
+  .panel { background: var(--card); border-radius: var(--radius);
+           box-shadow: var(--shadow); padding: 14px 18px; margin-bottom: 10px; }
+  .panel h2 { font-size: .95rem; margin-bottom: 8px; }
+  .panel .sub { font-size: .73rem; color: var(--muted); margin-bottom: 10px; }
+
+  .price-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+  .price-table th, .price-table td { padding: 7px 10px; text-align: left;
+    border-bottom: 1px solid var(--border); }
+  .price-table th { color: var(--muted); font-weight: 600; background: #f8fafc; }
+  .price-table td.na { color: var(--muted); font-style: italic; }
+
+  /* ── empty state ── */
+  .empty-hint { text-align: center; padding: 30px 20px; color: var(--muted); }
+  .empty-hint .icon { font-size: 2.2rem; margin-bottom: 8px; }
+  .empty-hint p { font-size: .82rem; margin-bottom: 10px; }
+  .empty-hint a { color: var(--accent); text-decoration: none; font-weight: 500; }
+
+  /* ── bottom nav ── */
+  .bottom-nav { display: flex; gap: 10px; justify-content: center; align-items: center;
+    margin-top: 14px; flex-wrap: wrap; }
+  .bottom-nav a, .bottom-nav button { padding: 7px 18px; border: 1px solid var(--border);
+    border-radius: 6px; font-size: .8rem; text-decoration: none; color: var(--text);
+    background: var(--card); cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .bottom-nav a:hover, .bottom-nav button:hover { border-color: var(--accent); color: var(--accent); }
+  .bottom-nav a.disabled { color: #d1d5db; pointer-events: none; }
+
+  canvas { max-height: 250px; }
+
+  @media (max-width: 640px) {
+    .info-grid { grid-template-columns: repeat(2, 1fr); }
+    .product-header { flex-direction: column; }
+    .product-header .img-box { width: 120px; height: 120px; margin: 0 auto; }
+    .product-header h1 { font-size: .9rem; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-inner">
+    <a href="/" class="logo" style="color:#fff;text-decoration:none;">
+      <span class="icon">🕷</span> Amazon Spider
+    </a>
+    <nav>
+      <a href="/">📦 商品浏览</a>
+      <a href="/dashboard">📊 驾驶舱</a>
+    </nav>
+    {% if kw %}
+    <a href="/?kw={{ kw }}" class="amazon-link" style="color:#94a3b8;">← 返回 {{ kw }}</a>
+    {% else %}
+    <a href="/" class="amazon-link" style="color:#94a3b8;">← 返回列表</a>
+    {% endif %}
+  </div>
+</nav>
+
+<div class="breadcrumb">
+  <a href="/">首页</a> <span>›</span>
+  {% if kw %}<a href="/?kw={{ kw }}">{{ kw }}</a> <span>›</span>{% endif %}
+  <span>{{ brand or '单品分析' }}</span> <span>›</span>
+  <span title="{{ asin }}">{{ title[:40] if title else asin }}</span>
+</div>
+
+<!-- crawl toast -->
+<div class="crawl-toast" id="crawl-toast">
+  <span class="spinner" id="toast-spinner"></span>
+  <span id="crawl-msg"></span>
+</div>
+
+<div class="main">
+
+  <!-- ── Data freshness banner ── -->
+  {% if hours_ago is not none %}
+  <div class="freshness-badge {{ 'fresh' if hours_ago is not none and hours_ago < 6 else ('stale' if hours_ago is not none and hours_ago < 24 else 'old') }}">
+    {% if hours_ago is not none %}
+      {% if hours_ago < 6 %}
+      🟢 数据采集于 {{ scraped_at[:19] }}（{{ freshness_text }}），数据较新
+      {% elif hours_ago < 24 %}
+      🟡 数据采集于 {{ scraped_at[:19] }}（{{ freshness_text }}），建议更新
+      {% else %}
+      🔴 数据采集于 {{ scraped_at[:19] }}（{{ freshness_text }}），数据可能已过时
+      {% endif %}
+    {% else %}
+    ⚪ 采集时间未知
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- ── Title + actions ── -->
+  <div class="product-header">
+    <div class="img-box">
+      {% if image_url %}
+      <img src="{{ image_url }}" alt="{{ title }}" loading="eager"
+           onerror="this.parentElement.innerHTML='<span class=\\'no-img\\'>📷</span>'">
+      {% else %}
+      <span class="no-img">📷</span>
+      {% endif %}
+    </div>
+    <div class="header-info">
+      <h1>
+        <span class="title-text">{{ title or asin }}</span>
+        <button class="copy-btn" onclick="copyText('{{ title|replace("'", "\\'") }}', this)" title="复制标题">📋 标题</button>
+        <button class="copy-btn" onclick="copyText('{{ asin }}', this)" title="复制 ASIN">🆔 ASIN</button>
+        <button class="copy-btn" onclick="copySummary()" title="复制完整数据摘要" style="border-color:var(--accent);color:var(--accent);font-weight:500;">📋 复制数据</button>
+        <button class="crawl-btn" id="crawl-btn" onclick="triggerCrawl('{{ asin }}')" title="重新采集此商品">🔄 重新采集</button>
+      </h1>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <a href="https://www.amazon.com/dp/{{ asin }}" target="_blank" class="amazon-link">🔗 Amazon</a>
+        <a href="https://www.amazon.com/dp/{{ asin }}/#customerReviews" target="_blank"
+           class="amazon-link" style="font-size:.75rem;">📝 评论</a>
+        {% if brand %}
+        <a href="https://www.amazon.com/s?me={{ brand }}" target="_blank"
+           class="amazon-link" style="font-size:.75rem;">🏪 店铺</a>
+        {% endif %}
+        <!-- clickable tags -->
+        {% if brand %}<a href="/?q={{ brand }}" class="tag clickable" style="background:#fef3c7;color:#92400e;">🏷 {{ brand }}</a>{% endif %}
+        {% if keyword %}<a href="/?kw={{ keyword }}" class="tag clickable" style="background:#dbeafe;color:#1e40af;">🔑 {{ keyword }}</a>{% endif %}
+        {% if bsr_short %}<span class="tag bsr">📊 {{ bsr_short }}</span>{% endif %}
+        {% if is_prime == 'Yes' %}<span class="tag prime">✓ Prime</span>{% endif %}
+        {% if fulfillment_type %}<span class="tag fba">{{ fulfillment_type[:20] }}</span>{% endif %}
+        {% if variation_count is not none %}<span class="tag">📐 {{ variation_count }} 变体</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ Card Group 1: Scraped Data ═══════ -->
+  <div class="section-label">📡 实时抓取数据</div>
+  <div class="info-grid">
+    {% if price is not none %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">当前价格</div>
+      <div class="value price">${{ '{:,.2f}'.format(price) }}</div>
+      {% if deltas.get('price') %}
+      <div class="delta {{ deltas.price[0] }}">{{ deltas.price[1] }}</div>
+      {% elif price_delta is not none %}
+      <div class="delta {{ 'up' if price_delta > 0 else ('down' if price_delta < 0 else '') }}">
+        {% if price_delta > 0 %}↑ +${{ '{:,.2f}'.format(price_delta) }}{% elif price_delta < 0 %}↓ -${{ '{:,.2f}'.format(price_delta|abs) }}{% else %}持平{% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if original_price is not none %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">原价</div>
+      <div class="value" style="text-decoration:line-through;color:var(--muted);font-size:.85rem;">${{ '{:,.2f}'.format(original_price) }}</div>
+    </div>
+    {% endif %}
+    {% if rating is not none %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">评分</div>
+      <div class="value rating">★ {{ '{:.1f}'.format(rating) }}</div>
+      {% if deltas.get('rating') %}
+      <div class="delta {{ deltas.rating[0] }}">{{ deltas.rating[1] }}</div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if review_count is not none %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">评论数</div>
+      <div class="value">{{ '{:,}'.format(review_count) }}</div>
+      {% if deltas.get('reviews') %}
+      <div class="delta {{ deltas.reviews[0] }}">{{ deltas.reviews[1] }}</div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if answered_questions is not none %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">Q&A 数量</div>
+      <div class="value">{{ answered_questions }}</div>
+    </div>
+    {% endif %}
+    {% if bsr_short %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">BSR 排名</div>
+      <div class="value blue">{{ bsr_short }}</div>
+      {% if deltas.get('bsr') %}
+      <div class="delta {{ deltas.bsr[0] }}">{{ deltas.bsr[1] }}</div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="info-grid">
+    {% if sold_by %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">卖家</div>
+      <div class="value" style="font-size:.85rem;">{{ sold_by[:40] }}</div>
+    </div>
+    {% endif %}
+    {% if coupon_text %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">优惠券</div>
+      <div class="value" style="color:#b45309;">{{ coupon_text[:40] }}</div>
+    </div>
+    {% endif %}
+    {% if availability %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">可用性</div>
+      <div class="value" style="font-size:.8rem;">{{ availability[:50] }}</div>
+    </div>
+    {% endif %}
+    {% if date_first_available %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">上架日期</div>
+      <div class="value" style="font-size:.8rem;">{{ date_first_available }}</div>
+    </div>
+    {% endif %}
+    {% if category %}
+    <div class="info-card">
+      <span class="source-tag scraped">抓取</span>
+      <div class="label">类目</div>
+      <div class="value" style="font-size:.72rem;">{{ category[:80] }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ═══════ Card Group 2: Derived Metrics ═══════ -->
+  <div class="section-label">🧮 衍生估算数据 <span style="font-weight:400;text-transform:none;letter-spacing:0;">（基于算法推算，非 Amazon 官方数据）</span></div>
+  <div class="info-grid">
+    {% if est_monthly_sales is not none %}
+    <div class="info-card">
+      <span class="source-tag derived">估算</span>
+      <div class="label">预估月销 ⓘ <span style="font-weight:400;font-size:.6rem;">(BSR 换算)</span></div>
+      <div class="value blue">{{ '{:,}'.format(est_monthly_sales) }}</div>
+    </div>
+    {% endif %}
+    {% if review_velocity is not none %}
+    <div class="info-card">
+      <span class="source-tag derived">估算</span>
+      <div class="label">日增评论 ⓘ <span style="font-weight:400;font-size:.6rem;">(评论/天数)</span></div>
+      <div class="value purple">{{ review_velocity }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Price chart ── -->
+  <div class="panel">
+    <h2>📈 价格走势</h2>
+    <div class="sub">{{ history|length }} 次历史记录</div>
+    {% if history|length >= 2 %}
+    <canvas id="priceChart" height="200"></canvas>
+    {% else %}
+    <div class="empty-hint">
+      <div class="icon">📊</div>
+      <p>仅 {{ history|length }} 次采集记录，暂无法生成价格走势图</p>
+      <p style="font-size:.75rem;">点击上方 <strong>🔄 重新采集</strong> 按钮再次采集，积累 2 次以上即可查看价格走势</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── History table ── -->
+  {% if history %}
+  <div class="panel">
+    <h2>📋 历史记录</h2>
+    <table class="price-table">
+      <thead><tr><th>采集时间</th><th>价格</th><th>BSR</th><th>评论数</th><th>预估月销</th></tr></thead>
+      <tbody>
+      {% for h in history %}
+      <tr>
+        <td>{{ h.scraped_at[:16] }}</td>
+        <td>{% if h.price is not none %}${{ '{:,.2f}'.format(h.price) }}{% else %}<span class="na">无数据</span>{% endif %}</td>
+        <td>{{ h.bsr or '-' }}</td>
+        <td>{% if h.review_count is not none %}{{ '{:,}'.format(h.review_count) }}{% else %}<span class="na">未采集</span>{% endif %}</td>
+        <td>{% if h.est_sales is not none %}{{ '{:,}'.format(h.est_sales) }}{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- ── Bottom navigation ── -->
+  <div class="bottom-nav">
+    {% if prev_asin %}
+    <a href="/product/{{ prev_asin }}?kw={{ kw }}">← 上一款</a>
+    {% endif %}
+
+    {% if next_asin %}
+    <a href="/product/{{ next_asin }}?kw={{ kw }}">下一款 →</a>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.classList.add('copied');
+    btn.textContent = '✓ 已复制';
+    setTimeout(() => { btn.classList.remove('copied'); btn.textContent = btn.dataset.orig || btn.textContent; }, 1500);
+  }).catch(() => {
+    // fallback
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    btn.classList.add('copied');
+    btn.textContent = '✓ 已复制';
+    setTimeout(() => { btn.classList.remove('copied'); btn.textContent = btn.dataset.orig || btn.textContent; }, 1500);
+  });
+}
+// Store original button text for restore
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.dataset.orig = btn.textContent;
+  btn.addEventListener('click', function() {
+    // restore is handled in copyText via setTimeout
+  });
+});
+
+function copySummary() {
+  var lines = [
+    'ASIN: {{ asin }}',
+    '商品: {{ title|replace("'", "\\'") }}',
+    {% if brand %}'品牌: {{ brand }}',{% endif %}
+    {% if price is not none %}'价格: ${{ '{:,.2f}'.format(price) }}',{% endif %}
+    {% if rating is not none %}'评分: {{ '{:.1f}'.format(rating) }} / 5',{% endif %}
+    {% if review_count is not none %}'评论数: {{ '{:,}'.format(review_count) }}',{% endif %}
+    {% if bsr_short %}'BSR: {{ bsr_short }}',{% endif %}
+    {% if est_monthly_sales is not none %}'预估月销: {{ '{:,}'.format(est_monthly_sales) }}',{% endif %}
+    {% if review_velocity is not none %}'日增评论: {{ review_velocity }}',{% endif %}
+    {% if is_prime == 'Yes' %}'Prime: 支持',{% endif %}
+    {% if fulfillment_type %}'配送: {{ fulfillment_type }}',{% endif %}
+    '链接: https://www.amazon.com/dp/{{ asin }}'
+  ];
+  navigator.clipboard.writeText(lines.join('\\n')).then(() => {
+    var btn = event.target;
+    btn.textContent = '✓ 复制成功';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.color = 'var(--green)';
+    btn.style.background = '#d1fae5';
+    setTimeout(() => {
+      btn.textContent = '📋 复制数据';
+      btn.style.borderColor = 'var(--accent)';
+      btn.style.color = 'var(--accent)';
+      btn.style.background = '';
+    }, 1500);
+  }).catch(() => {
+    var ta = document.createElement('textarea');
+    ta.value = lines.join('\\n'); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    event.target.textContent = '✓ 复制成功';
+    setTimeout(() => { event.target.textContent = '📋 复制数据'; }, 1500);
+  });
+}
+
+// ── Crawl trigger ────────────────────────────────────────────────────
+let crawlTimer = null;
+// Snapshot current data before crawl for comparison
+var _snap = {
+  price: {{ price if price is not none else 'null' }},
+  bsr: "{{ bsr_short }}",
+  review_count: {{ review_count if review_count is not none else 'null' }},
+  rating: {{ rating if rating is not none else 'null' }},
+};
+
+function showToast(msg, type) {
+  var t = document.getElementById('crawl-toast');
+  var spinner = document.getElementById('toast-spinner');
+  t.className = 'crawl-toast ' + type;
+  document.getElementById('crawl-msg').textContent = msg;
+  spinner.style.display = (type === 'running') ? '' : 'none';
+  t.style.display = 'flex';
+}
+
+function hideToast() {
+  document.getElementById('crawl-toast').style.display = 'none';
+  if (crawlTimer) { clearInterval(crawlTimer); crawlTimer = null; }
+}
+
+async function triggerCrawl(asin) {
+  var btn = document.getElementById('crawl-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 启动中…';
+  showToast('采集任务启动中…', 'running');
+
+  try {
+    var r = await fetch('/api/crawl', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({asin: asin})
+    });
+    var d = await r.json();
+
+    if (d.error) {
+      showToast(d.error, 'error');
+      btn.disabled = false;
+      btn.textContent = '🔄 重新采集';
+      setTimeout(hideToast, 5000);
+      return;
+    }
+
+    showToast('正在采集商品数据（约30-60秒）…', 'running');
+    btn.textContent = '⏳ 采集中…';
+    pollCrawlStatus(d.job_id, btn);
+  } catch(e) {
+    showToast('网络错误，请重试', 'error');
+    btn.disabled = false;
+    btn.textContent = '🔄 重新采集';
+    setTimeout(hideToast, 4000);
+  }
+}
+
+function pollCrawlStatus(jobId, btn) {
+  crawlTimer = setInterval(async () => {
+    try {
+      var r = await fetch('/api/crawl-status/' + jobId);
+      var d = await r.json();
+      if (d.status === 'done') {
+        clearInterval(crawlTimer);
+        showToast('✓ 采集完成！页面即将刷新…', 'done');
+        setTimeout(() => { location.reload(); }, 1200);
+      } else if (d.status === 'error') {
+        clearInterval(crawlTimer);
+        showToast('采集失败，请查看终端日志', 'error');
+        btn.disabled = false;
+        btn.textContent = '🔄 重新采集';
+        setTimeout(hideToast, 5000);
+      }
+    } catch(e) {}
+  }, 3000);
+}
+
+{% if history|length >= 2 %}
+const ctx = document.getElementById('priceChart').getContext('2d');
+new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: {{ hist_labels|tojson }},
+    datasets: [{
+      label: '价格 (USD)',
+      data: {{ hist_prices|tojson }},
+      borderColor: '#2563eb',
+      backgroundColor: 'rgba(37,99,235,0.08)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 3,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { beginAtZero: false, title: { display: true, text: 'USD' } },
+      x: { title: { display: true, text: '采集时间' } }
+    }
+  }
+});
+{% endif %}
+</script>
+</body>
+</html>'''
+
+
+@app.route('/product/<asin>')
+def product_detail(asin):
+    from datetime import datetime
+    from core.metrics import (
+        compute_est_monthly_sales, compute_review_velocity, parse_bsr_rank,
+    )
+
+    db = get_db()
+    kw = request.args.get('kw', '').strip()
+
+    row = db.execute(
+        """SELECT * FROM products WHERE asin = ?""", (asin,)
+    ).fetchone()
+
+    if not row:
+        return render_template_string(
+            '''<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+            <title>404 — Amazon Spider</title></head>
+            <body style="font-family:sans-serif;text-align:center;padding:80px;
+            background:#f0f2f5;"><h1 style="color:#dc2626;">404</h1>
+            <p>ASIN 未找到: {{ asin }}</p>
+            <a href="/" style="color:#2563eb;">← 返回商品列表</a></body></html>''',
+            asin=asin
+        ), 404
+
+    # ── Derived metrics ──────────────────────────────────────────────────
+    est_sales = compute_est_monthly_sales(row['bsr'])
+    review_vel = compute_review_velocity(row['review_count'], row['date_first_available'])
+    bsr_rank = parse_bsr_rank(row['bsr'])
+    bsr_short = f'BSR #{bsr_rank:,}' if bsr_rank else (row['bsr'] or '')
+
+    # ── Price history ────────────────────────────────────────────────────
+    hist = db.execute(
+        """SELECT price, bsr, review_count, scraped_at FROM price_history
+           WHERE asin = ? ORDER BY scraped_at ASC""", (asin,)
+    ).fetchall()
+
+    hist_labels = [h['scraped_at'][:16] for h in hist]
+    hist_prices = [h['price'] for h in hist]
+
+    # ── Price delta vs previous crawl ────────────────────────────────────
+    price_delta = None
+    if len(hist) >= 2:
+        prev_p = hist[-2]['price']
+        curr_p = hist[-1]['price']
+        if prev_p is not None and curr_p is not None:
+            price_delta = round(curr_p - prev_p, 2)
+
+    # ── Data freshness ───────────────────────────────────────────────────
+    scraped_at = row['scraped_at']
+    hours_ago = None
+    freshness_text = ''
+    if scraped_at:
+        try:
+            s = str(scraped_at)[:19]
+            scraped_dt = datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+            delta = datetime.now() - scraped_dt
+            total_secs = int(delta.total_seconds())
+            h = total_secs // 3600
+            m = (total_secs % 3600) // 60
+            hours_ago = h
+            if h > 0:
+                freshness_text = f'{h}小时{m}分前' if m > 0 else f'{h}小时前'
+            else:
+                freshness_text = f'{m}分钟前' if m > 0 else '刚刚'
+        except (ValueError, TypeError):
+            pass
+
+    # ── Per-field deltas vs previous crawl ───────────────────────────────
+    deltas = {}
+    if len(hist) >= 2:
+        prev = hist[-2]
+        curr = hist[-1]
+
+        # price delta
+        if prev['price'] is not None and curr['price'] is not None:
+            d = round(curr['price'] - prev['price'], 2)
+            if d > 0.01:
+                deltas['price'] = ('up', f'+${d:,.2f}')
+            elif d < -0.01:
+                deltas['price'] = ('down', f'-${abs(d):,.2f}')
+            else:
+                deltas['price'] = ('flat', '持平')
+
+        # BSR delta
+        prev_bsr = parse_bsr_rank(prev['bsr'])
+        curr_bsr = parse_bsr_rank(curr['bsr'])
+        if prev_bsr is not None and curr_bsr is not None:
+            d = prev_bsr - curr_bsr  # positive = improved (lower rank number)
+            if d > 0:
+                deltas['bsr'] = ('down', f'↑{d}位 (变好)')
+            elif d < 0:
+                deltas['bsr'] = ('up', f'↓{abs(d)}位 (变差)')
+            else:
+                deltas['bsr'] = ('flat', '排名未变')
+
+        # review delta
+        if prev['review_count'] is not None and curr['review_count'] is not None:
+            d = curr['review_count'] - prev['review_count']
+            if d > 0:
+                deltas['reviews'] = ('up', f'+{d}')
+            elif d < 0:
+                deltas['reviews'] = ('down', str(d))
+            else:
+                deltas['reviews'] = ('flat', '未变')
+
+    # ── Prev / Next navigation ───────────────────────────────────────────
+    prev_asin = next_asin = None
+    if kw:
+        siblings = db.execute(
+            "SELECT asin FROM products WHERE keyword=? ORDER BY scraped_at DESC",
+            (kw,)
+        ).fetchall()
+        asin_list = [s['asin'] for s in siblings]
+        if asin in asin_list:
+            idx = asin_list.index(asin)
+            if idx > 0:
+                prev_asin = asin_list[idx - 1]
+            if idx < len(asin_list) - 1:
+                next_asin = asin_list[idx + 1]
+
+    # ── History rows with derived metrics ────────────────────────────────
+    hist_rows = []
+    for h in hist:
+        hd = dict(h)
+        hd['est_sales'] = compute_est_monthly_sales(h['bsr'])
+        hist_rows.append(hd)
+
+    return render_template_string(
+        PRODUCT_TEMPLATE,
+        asin=asin, kw=kw,
+        title=row['title'], price=row['price'],
+        image_url=row['image_url'],
+        original_price=row['original_price'], rating=row['rating'],
+        review_count=row['review_count'], brand=row['brand'],
+        category=row['category'], availability=row['availability'],
+        is_prime=row['is_prime'], date_first_available=row['date_first_available'],
+        bsr=row['bsr'], bsr_short=bsr_short,
+        coupon_text=row['coupon_text'], answered_questions=row['answered_questions'],
+        variation_count=row['variation_count'], fulfillment_type=row['fulfillment_type'],
+        sold_by=row['sold_by'], keyword=row['keyword'],
+        est_monthly_sales=est_sales, review_velocity=review_vel,
+        price_delta=price_delta,
+        scraped_at=scraped_at, hours_ago=hours_ago, freshness_text=freshness_text,
+        deltas=deltas,
+        prev_asin=prev_asin, next_asin=next_asin,
+        history=hist_rows, hist_labels=hist_labels, hist_prices=hist_prices,
+        hist_rows_json=json.dumps([{
+            'price': h['price'], 'review_count': h['review_count'],
+            'bsr': h['bsr'],
+        } for h in hist_rows]),
+    )
+
+
 @app.route('/dashboard')
 def dashboard():
     return render_template_string(DASHBOARD_TEMPLATE)
@@ -959,12 +2042,12 @@ def api_products():
     kw = request.args.get('kw', '').strip()
     if kw:
         rows = db.execute(
-            "SELECT asin, title, brand, price FROM products WHERE keyword=? ORDER BY scraped_at DESC",
+            "SELECT asin, title, brand, price, keyword FROM products WHERE keyword=? ORDER BY scraped_at DESC",
             (kw,)
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT asin, title, brand, price FROM products ORDER BY scraped_at DESC LIMIT 100"
+            "SELECT asin, title, brand, price, keyword FROM products ORDER BY scraped_at DESC LIMIT 200"
         ).fetchall()
     return jsonify({'products': [dict(r) for r in rows]})
 
@@ -1134,6 +2217,107 @@ def api_price_distribution():
         })
 
     return jsonify({'keyword': kw or None, 'distribution': distribution})
+
+
+# ── Crawl trigger ──────────────────────────────────────────────────────────
+
+_crawl_jobs: dict = {}          # job_id → {status, output, started_at}
+_crawl_lock = threading.Lock()
+_ASIN_COOLDOWN = 60             # single-ASIN: 1 min (only 1 detail page, low risk)
+_KEYWORD_COOLDOWN = 180         # keyword: 3 min (search + multi detail, higher risk)
+_last_crawl_time: float = 0.0
+
+
+@app.route('/api/crawl', methods=['POST'])
+def api_crawl():
+    global _last_crawl_time
+
+    data = request.get_json(silent=True) or {}
+    asin = (data.get('asin') or '').strip()
+    keyword = (data.get('keyword') or '').strip()
+
+    if not asin and not keyword:
+        return jsonify({'error': '请提供 asin 或 keyword'}), 400
+
+    is_asin = bool(asin)
+    cooldown = _ASIN_COOLDOWN if is_asin else _KEYWORD_COOLDOWN
+
+    # ── anti-block: enforce cooldown ────────────────────────────────────
+    now = datetime.now().timestamp()
+    with _crawl_lock:
+        elapsed = now - _last_crawl_time
+        if elapsed < cooldown:
+            wait = int(cooldown - elapsed)
+            return jsonify({
+                'error': f'防封保护：距上次采集仅 {int(elapsed)} 秒，请等待 {wait} 秒后再试',
+                'retry_after': wait,
+            }), 429
+
+        # Check no running job
+        for jid, j in list(_crawl_jobs.items()):
+            if j.get('status') == 'running':
+                return jsonify({
+                    'error': '防封保护：上一个采集任务仍在运行中，请等待完成',
+                }), 429
+
+        _last_crawl_time = now
+
+    job_id = uuid.uuid4().hex[:8]
+
+    # Build scrapy command (respect existing DOWNLOAD_DELAY=5s, CONCURRENT=1)
+    cmd = [
+        sys.executable, '-m', 'scrapy', 'crawl', 'amazon',
+        '-a', 'max_pages=1',
+        '-a', 'crawl_detail=1',
+        '-a', 'headless=True',
+        '-s', 'PROXY_ENABLED=False',
+        '-s', 'FEEDS=',
+    ]
+
+    if asin:
+        cmd.extend(['-a', f'asins={asin}', '-a', 'keyword=web_crawl'])
+    elif keyword:
+        cmd.extend(['-a', f'keyword={keyword}'])
+
+    def run_crawl() -> None:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=os.path.dirname(os.path.abspath(__file__)) or '.',
+            )
+            _crawl_jobs[job_id]['pid'] = proc.pid
+            output, _ = proc.communicate(timeout=300)
+            _crawl_jobs[job_id]['status'] = 'done' if proc.returncode == 0 else 'error'
+            _crawl_jobs[job_id]['output'] = output[-3000:]
+        except subprocess.TimeoutExpired:
+            _crawl_jobs[job_id]['status'] = 'error'
+            _crawl_jobs[job_id]['output'] = '采集超时（>5分钟）'
+        except Exception as e:
+            _crawl_jobs[job_id]['status'] = 'error'
+            _crawl_jobs[job_id]['output'] = str(e)
+
+    _crawl_jobs[job_id] = {
+        'status': 'running', 'output': '', 'started_at': datetime.now().isoformat(),
+    }
+    threading.Thread(target=run_crawl, daemon=True).start()
+
+    return jsonify({'job_id': job_id, 'status': 'running'})
+
+
+@app.route('/api/crawl-status/<job_id>')
+def api_crawl_status(job_id):
+    job = _crawl_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': '任务不存在'}), 404
+    return jsonify({
+        'job_id': job_id,
+        'status': job['status'],
+        'output': job.get('output', '')[-1500:],
+        'started_at': job.get('started_at'),
+    })
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────

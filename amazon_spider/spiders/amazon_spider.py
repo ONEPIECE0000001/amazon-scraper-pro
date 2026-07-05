@@ -296,7 +296,7 @@ class AdvancedAmazonSpider(scrapy.Spider):
                     "variation_count": None,
                     "fulfillment_type": None,
                     "sold_by": None,
-                    "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 }
 
                 if self._crawl_detail and product_url:
