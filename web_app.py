@@ -365,7 +365,7 @@ def index():
     rows = db.execute(
         f"""SELECT keyword, asin, title, price, rating, review_count,
                    brand, category, is_prime, availability,
-                   date_first_available, url, scraped_at, image_url,
+                   date_first_available, scraped_at, image_url,
                    bsr, coupon_text, answered_questions, variation_count,
                    fulfillment_type, sold_by
             FROM products {where_clause}
@@ -388,7 +388,7 @@ def index():
             'category': row['category'],
             'is_prime': row['is_prime'],
             'availability': row['availability'],
-            'url': row['url'],
+            'url': f"https://www.amazon.com/dp/{row['asin']}",
             'image': row['image_url'],
             'bsr': row['bsr'],
             'coupon_text': row['coupon_text'],

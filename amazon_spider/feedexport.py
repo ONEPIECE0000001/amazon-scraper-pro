@@ -16,13 +16,16 @@ HEADER_MAP = {
     "review_count": "评论数(review_count)",
     "brand": "品牌(brand)",
     "category": "类目(category)",
-    "seller_name": "卖家(seller_name)",
     "availability": "库存/物流(availability)",
     "is_prime": "是否Prime(is_prime)",
-    "url": "商品链接(url)",
     "image_url": "图片链接(image_url)",
-    "description": "描述(description)",
     "date_first_available": "上架日期(date_first_available)",
+    "bsr": "BSR排名(bsr)",
+    "coupon_text": "优惠券(coupon_text)",
+    "answered_questions": "问答数(answered_questions)",
+    "variation_count": "变体数(variation_count)",
+    "fulfillment_type": "配送类型(fulfillment_type)",
+    "sold_by": "卖家(sold_by)",
     "scraped_at": "抓取时间(scraped_at)",
 }
 
@@ -31,9 +34,11 @@ HEADER_MAP = {
 FIELD_ORDER = [
     "keyword",
     "asin", "title", "price", "original_price", "rating", "review_count",
-    "brand", "category", "seller_name", "availability", "is_prime",
-    "description", "date_first_available",
-    "url", "image_url", "scraped_at",
+    "brand", "category", "availability", "is_prime",
+    "date_first_available",
+    "bsr", "coupon_text", "answered_questions",
+    "variation_count", "fulfillment_type", "sold_by",
+    "image_url", "scraped_at",
 ]
 
 

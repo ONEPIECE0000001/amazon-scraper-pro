@@ -11,12 +11,9 @@ class AmazonProductItem(scrapy.Item):
     review_count = scrapy.Field()
     brand = scrapy.Field()
     category = scrapy.Field()
-    seller_name = scrapy.Field()
     availability = scrapy.Field()
     is_prime = scrapy.Field()
-    url = scrapy.Field()
     image_url = scrapy.Field()
-    description = scrapy.Field()
     date_first_available = scrapy.Field()
     # 第一期新增字段
     bsr = scrapy.Field()                    # Best Sellers Rank

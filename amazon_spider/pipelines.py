@@ -79,7 +79,7 @@ class DataCleaningPipeline:
             raise DropItem(f"Invalid ASIN: {asin}")
 
         # --- 字符串字段 strip ---
-        for field in ('title', 'brand', 'category', 'description',
+        for field in ('title', 'brand', 'category',
                       'bsr', 'coupon_text', 'fulfillment_type', 'sold_by'):
             val = item.get(field)
             if isinstance(val, str):
@@ -146,12 +146,48 @@ class SQLitePipeline:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.execute("PRAGMA journal_mode=WAL")
 
-        # Auto-migrate: drop table if schema is missing 'keyword' column
+        # Auto-migrate: add missing columns for old databases
         try:
             cols = {r[1] for r in self.conn.execute("PRAGMA table_info(products)")}
-            if cols and 'keyword' not in cols:
-                logger.info("SQLite: old schema detected, recreating table")
-                self.conn.execute("DROP TABLE IF EXISTS products")
+            if cols:
+                # Drop old table if pre-July-2025 schema (no keyword column)
+                if 'keyword' not in cols:
+                    logger.info("SQLite: pre-v2 schema detected, recreating table")
+                    self.conn.execute("DROP TABLE IF EXISTS products")
+                else:
+                    # Add any missing columns (ALTER TABLE ADD COLUMN is safe in SQLite)
+                    desired_cols = {
+                        'keyword': 'TEXT NOT NULL DEFAULT \'\'',
+                        'asin': 'TEXT NOT NULL',
+                        'title': 'TEXT',
+                        'price': 'REAL',
+                        'original_price': 'REAL',
+                        'rating': 'REAL',
+                        'review_count': 'INTEGER',
+                        'brand': 'TEXT',
+                        'category': 'TEXT',
+                        'availability': 'TEXT',
+                        'is_prime': 'TEXT',
+                        'image_url': 'TEXT',
+                        'date_first_available': 'TEXT',
+                        'bsr': 'TEXT',
+                        'coupon_text': 'TEXT',
+                        'answered_questions': 'INTEGER',
+                        'variation_count': 'INTEGER',
+                        'fulfillment_type': 'TEXT',
+                        'sold_by': 'TEXT',
+                        'scraped_at': 'TEXT',
+                        'created_at': 'TEXT DEFAULT (datetime(\'now\'))',
+                    }
+                    for col, col_def in desired_cols.items():
+                        if col not in cols:
+                            try:
+                                self.conn.execute(
+                                    f"ALTER TABLE products ADD COLUMN {col} {col_def}"
+                                )
+                                logger.info(f"SQLite: added missing column '{col}'")
+                            except sqlite3.OperationalError as e:
+                                logger.warning(f"SQLite: failed to add column '{col}': {e}")
         except sqlite3.OperationalError:
             pass
 
@@ -167,12 +203,9 @@ class SQLitePipeline:
                 review_count INTEGER,
                 brand       TEXT,
                 category    TEXT,
-                seller_name TEXT,
                 availability TEXT,
                 is_prime    TEXT,
-                url         TEXT,
                 image_url   TEXT,
-                description TEXT,
                 date_first_available TEXT,
                 bsr                     TEXT,
                 coupon_text             TEXT,
@@ -187,6 +220,25 @@ class SQLitePipeline:
         """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_asin ON products(asin)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_keyword ON products(keyword)")
+
+        # ── price_history table — append-only time series ──────────────
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword     TEXT    NOT NULL,
+                asin        TEXT    NOT NULL,
+                price       REAL,
+                bsr         TEXT,
+                scraped_at  TEXT    NOT NULL,
+                UNIQUE(keyword, asin, scraped_at)
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ph_asin ON price_history(asin)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ph_keyword ON price_history(keyword)"
+        )
         self.conn.commit()
 
     def process_item(self, item: scrapy.Item, spider: scrapy.Spider) -> scrapy.Item:
@@ -198,11 +250,11 @@ class SQLitePipeline:
             self.conn.execute("""
                 INSERT INTO products
                     (keyword, asin, title, price, original_price, rating, review_count,
-                     brand, category, seller_name, availability, is_prime,
-                     url, image_url, description, date_first_available,
+                     brand, category, availability, is_prime,
+                     image_url, date_first_available,
                      bsr, coupon_text, answered_questions, variation_count,
                      fulfillment_type, sold_by, scraped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(keyword, asin) DO UPDATE SET
                     title       = excluded.title,
                     price       = excluded.price,
@@ -224,13 +276,24 @@ class SQLitePipeline:
             """, (
                 item.get('keyword', ''), item.get('asin'), item.get('title'), item.get('price'),
                 item.get('original_price'), item.get('rating'), item.get('review_count'),
-                item.get('brand'), item.get('category'), item.get('seller_name'),
+                item.get('brand'), item.get('category'),
                 item.get('availability'), item.get('is_prime'),
-                item.get('url'), item.get('image_url'), item.get('description'),
-                item.get('date_first_available'),
+                item.get('image_url'), item.get('date_first_available'),
                 item.get('bsr'), item.get('coupon_text'), item.get('answered_questions'),
                 item.get('variation_count'), item.get('fulfillment_type'), item.get('sold_by'),
                 item.get('scraped_at'),
+            ))
+            # ── dual-write: append to price_history ────────────────────
+            self.conn.execute("""
+                INSERT OR IGNORE INTO price_history
+                    (keyword, asin, price, bsr, scraped_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                item.get('keyword', ''),
+                item.get('asin'),
+                item.get('price'),
+                item.get('bsr'),
+                item.get('scraped_at') or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             ))
             self.conn.commit()
         except sqlite3.Error as e:
@@ -287,12 +350,9 @@ class MySQLPipeline:
                     review_count INT,
                     brand VARCHAR(255),
                     category VARCHAR(255),
-                    seller_name VARCHAR(255),
                     availability VARCHAR(255),
                     is_prime VARCHAR(10),
-                    url TEXT,
                     image_url TEXT,
-                    description TEXT,
                     date_first_available VARCHAR(255),
                     bsr TEXT,
                     coupon_text TEXT,
@@ -319,13 +379,13 @@ class MySQLPipeline:
             self.cursor.execute("""
                 INSERT INTO products
                     (asin, title, price, original_price, rating, review_count,
-                     brand, category, seller_name, availability, is_prime,
-                     url, image_url, description, date_first_available,
+                     brand, category, availability, is_prime,
+                     image_url, date_first_available,
                      bsr, coupon_text, answered_questions, variation_count,
                      fulfillment_type, sold_by, scraped_at)
                 VALUES
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                     %s, %s, %s, %s, %s, %s, %s)
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                     %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     price = VALUES(price),
                     rating = VALUES(rating),
@@ -341,10 +401,9 @@ class MySQLPipeline:
             """, (
                 item.get('asin'), item.get('title'), item.get('price'),
                 item.get('original_price'), item.get('rating'), item.get('review_count'),
-                item.get('brand'), item.get('category'), item.get('seller_name'),
+                item.get('brand'), item.get('category'),
                 item.get('availability'), item.get('is_prime'),
-                item.get('url'), item.get('image_url'), item.get('description'),
-                item.get('date_first_available'),
+                item.get('image_url'), item.get('date_first_available'),
                 item.get('bsr'), item.get('coupon_text'), item.get('answered_questions'),
                 item.get('variation_count'), item.get('fulfillment_type'), item.get('sold_by'),
                 item.get('scraped_at'),

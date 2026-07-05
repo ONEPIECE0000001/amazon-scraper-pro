@@ -270,14 +270,11 @@ class AdvancedAmazonSpider(scrapy.Spider):
                     "price": price,
                     "rating": rating,
                     "review_count": review_count,
-                    "url": product_url,
                     "image_url": image_url,
                     "brand": None,
                     "category": None,
-                    "seller_name": None,
                     "availability": None,
                     "is_prime": None,
-                    "description": None,
                     "original_price": None,
                     "date_first_available": None,
                     "bsr": None,
@@ -395,99 +392,97 @@ class AdvancedAmazonSpider(scrapy.Spider):
 
         # ── 第一期新增字段 ─────────────────────────────────────────
 
-        # BSR (Best Sellers Rank)
+        # BSR (Best Sellers Rank) — try detail bullets + regex on full text
         bsr = None
-        bsr_block = response.css(
-            "#productDetails_detailBullets_sections1, "
-            "#detailBulletsWrapper_feature_div, "
-            "#productDetails_db_sections"
-        )
-        if bsr_block:
-            bsr_text = bsr_block.css(
-                "th:contains('Best Sellers Rank') + td::text, "
-                "th:contains('Best Sellers Rank') + td span::text"
-            ).get()
-            if not bsr_text:
-                # Fallback: search whole block text for BSR pattern
-                full = " ".join(bsr_block.css("::text").getall())
-                m = re.search(
-                    r"Best Sellers Rank[:\s]*([^#\n]+?)(?=\s*(?:#|$))", full
-                )
-                if m:
-                    bsr_text = m.group(1).strip()
-            if bsr_text:
-                bsr = _clean_text(bsr_text)
+        # Try product details table first
+        for entry in response.css("tr"):
+            th = (entry.css("th::text").get() or "").strip()
+            if "Best Sellers Rank" in th:
+                bsr = _clean_text(entry.css("td::text").get() or "")
+                break
+        if not bsr:
+            # Fallback: regex on full page text for BSR pattern like "#1 in Electronics"
+            full_text = " ".join(response.css("body ::text").getall())
+            m = re.search(r"#[\d,]+\s+in\s+[A-Z][A-Za-z\s&]+(?:\s*\([^)]+\))?", full_text)
+            if m:
+                bsr = m.group().strip()
 
-        # Coupon / discount text
+        # Coupon / discount — try various badge selectors
         coupon_text = None
         for sel in (
-            ".promoPriceBlockMessage::text",
-            ".vpcoupon::text",
-            "#couponText::text",
+            "#couponsInBuybox_feature_div .a-badge-label-inner::text",
+            "#promoPriceBlockMessage_feature_div .a-badge-label-inner::text",
             ".a-badge-label-inner::text",
             "[data-a-badge-color='sx-gold'] .a-badge-label-inner::text",
+            ".promoPriceBlockMessage::text",
         ):
             t = response.css(sel).get()
             if t and t.strip():
                 coupon_text = _clean_text(t)
                 break
 
-        # Answered questions count
+        # Answered questions count — try ask block + regex on full text
         answered_questions = None
-        qa_text = response.css("#ask-btf .a-size-base::text").get()
-        if not qa_text:
-            qa_text = response.css(
-                "#ask-btf .a-size-base .a-text-bold::text"
-            ).get()
-        if qa_text:
-            m = re.search(r"\d+", qa_text)
+        qa_sel = response.css("#ask-btf .a-size-base::text").get()
+        if not qa_sel:
+            # Try the "answered questions" text anywhere
+            full_text = " ".join(response.css("body ::text").getall())
+            m = re.search(r"(\d+)\s+answered\s+question", full_text, re.I)
+            if m:
+                answered_questions = int(m.group(1))
+        else:
+            m = re.search(r"\d+", qa_sel)
             if m:
                 answered_questions = int(m.group())
 
-        # Variation count (color/size swatches)
+        # Variation count — count swatch <li> elements by data attribute
         variation_count = None
-        swatches = response.css("#twister .swatchAvailable, #variation_size_name li")
+        swatches = response.css(
+            "li[data-csa-c-content-id*='swatchAvailable']"
+        )
+        if not swatches:
+            swatches = response.css(
+                "#twister_feature_div li[data-asin]"
+            )
         if swatches:
-            variation_count = len(swatches)
+            # Deduplicate by data-asin to get unique variations
+            unique = set()
+            for s in swatches:
+                asin = s.css("::attr(data-asin)").get()
+                if asin:
+                    unique.add(asin)
+            variation_count = len(unique) if unique else len(swatches)
+        if not variation_count:
+            # Fallback: extract num_total_variations from <script> JSON
+            m = re.search(
+                r'"num_total_variations"\s*:\s*(\d+)', response.text
+            )
+            if m:
+                variation_count = int(m.group(1))
 
-        # Fulfillment type — FBA vs FBM
+        # Fulfillment type — regex on raw HTML for "Ships from:" pattern
         fulfillment_type = None
-        fulfiller = response.css("#fulfillerInfo_feature_div::text").get()
-        if not fulfiller:
-            fulfiller = response.css(
-                "#merchantInfoFeature_feature_div::text"
-            ).get()
-        if fulfiller:
-            fulfiller = fulfiller.strip()
-            if "amazon" in fulfiller.lower() or "fba" in fulfiller.lower():
-                fulfillment_type = "FBA"
-            elif (
-                "ships from" in fulfiller.lower()
-                and "amazon" not in fulfiller.lower()
-            ):
-                fulfillment_type = "FBM"
-            else:
-                fulfillment_type = _clean_text(fulfiller)
+        m = re.search(
+            r"Ships from:\s*</span>\s*<span[^>]*>([^<]+)",
+            response.text
+        )
+        if m:
+            shipper = m.group(1).strip()
+            fulfillment_type = "FBA" if "amazon" in shipper.lower() else f"FBM ({shipper[:30]})"
 
-        # Sold by
+        # Sold by — regex on raw HTML for "Sold by:" pattern
         sold_by = None
-        seller = response.css("#sellerProfileTriggerId::text").get()
-        if not seller:
-            seller = response.css(
-                "#merchant-info a::text, "
-                "#merchant-info::text"
-            ).get()
-        if not seller:
-            # Try product details table
-            for entry in response.css("tr"):
-                label = entry.css("th.prodDetSectionEntry::text").get()
-                if label and "Sold by" in label:
-                    value = entry.css("td.prodDetAttrValue::text").get()
-                    if value:
-                        seller = value
-                        break
-        if seller:
-            sold_by = _clean_text(seller)
+        m = re.search(
+            r"Sold by:\s*</span>\s*<span[^>]*>([^<]+)",
+            response.text
+        )
+        if m:
+            sold_by = _clean_text(m.group(1))
+        if not sold_by:
+            # Fallback: #merchant-info link
+            seller = response.css("#merchant-info a::text").get()
+            if seller:
+                sold_by = _clean_text(seller)
 
         # Merge search + detail data → item
         item = self._pending.pop(product_id, None)
